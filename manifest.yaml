@@ -1,0 +1,104 @@
+manifestVersion: 1
+name: "@mgreten/software-factory"
+version: "2026.08.10.1"
+description: |
+  A fully generic, model-driven state machine for guiding agents through a
+  software development lifecycle. The entire machine — stages, transitions,
+  gates, required artifacts, review skills, agent commands, system prompts —
+  lives in the model definition's globalArguments as data. The engine ships
+  no lifecycle concepts: adversarial review, comprehensive testing, release,
+  and UAT stages are expressible (see examples/), never assumed.
+
+  ## How it works
+
+  An instance is a factory serving many work items concurrently — every
+  method takes workItem, and all run data is namespaced per work item:
+
+  ```
+  swamp model create @mgreten/software-factory my-factory
+  swamp model edit my-factory      # fill globalArguments: stages
+  swamp model method run my-factory start --input workItem=ISSUE-42
+  ```
+
+  The driver loop is the same for every factory: `status` persists a
+  self-describing packet (current stage, work spec with run-data bindings
+  resolved, per-gate transition readiness, context manifest) as a queryable
+  `status-<workItem>` record, and the driver reads exactly the fields it needs
+  with `swamp data query --select` rather than re-parsing a whole blob; it then
+  does the stage's work, records products, and advances. Gates are hard
+  enforcement — evaluated in pre-flight checks and re-validated inside
+  `advance`.
+
+  ## Methods
+
+  - `start` — validate the graph and start a work item at the initial stage
+    (refuses to restart; resume with `status`)
+  - `status` — the driver's entrypoint: what a work item requires right now,
+    or a factory-wide overview of all runs
+  - `record_dispatch` — record that a stage's work ran (before it runs); proves
+    execution so a stage can't be skipped, and drives the runaway-loop guard
+    (third dispatch of an entry hard-fails as runaway-loop-suspected)
+  - `record_artifact` / `record_evidence` — versioned, schema-validated work
+    products and external facts (every artifact and evidence carries a declared
+    schema, validated on record; strict objects by default)
+  - `resolve_findings` — resolution notes on kind: findings artifacts
+  - `approve` / `reject` — human gate decisions, cycle-scoped; gates may bind
+    decisions to exact artifact/evidence versions and canonical payload digests
+  - `advance` — move along a gated transition
+  - `summary` — full implementation history of a work item as markdown,
+    rendered statically from the run data (no LLM); also persisted via the
+    @mgreten/software-factory/work-item-summary report
+  - `validate` / `describe` — definition lint; Mermaid + tables
+  - `reset` — destructive restart, requires confirm=reset
+
+  ## Gates
+
+  artifact-exists, artifact-fresh (subject-version + recordedThisCycle),
+  findings-clear, human-approval (optionally subject-bound), evidence-recorded (cycle-scoped, field
+  matching), cooldown, max-cycles (routing), cel (CEL predicates over run
+  data), workflow-succeeded (verified against swamp's own workflow run
+  records, not driver attestation).
+
+  Every stage carries maxCycles (default 5): entries past the limit park the
+  run for an explicit human cycle-override approval.
+
+  ## Run data
+
+  All resources are versioned, immutable, and namespaced per work item:
+  `state-<workItem>`, `artifact-<workItem>-<name>`,
+  `evidence-<workItem>-<name>`, `approval-<workItem>-<gateId>`,
+  `validation-<workItem>-<target>` (recorded payload-validation failures,
+  bindable as retry feedback), an append-only `journal-<workItem>`, and a
+  `status-<workItem>` materialized view (refreshed on every `status` call;
+  `status-_factory` holds the fleet overview) that the driver queries instead
+  of scraping a log line.
+
+repository: "https://github.com/meagerfindings/swamp-software-factory"
+
+skills:
+  - software-factory
+
+models:
+  - software_factory.ts
+
+reports:
+  - work_item_summary_report.ts
+
+additionalFiles:
+  - COPYING.txt
+  - COPYING-EXCEPTION.txt
+  - LICENSE.txt
+  - NOTICE.md
+  - README.md
+  - DESIGN.md
+  - examples/minimal.yaml
+  - examples/feature-factory.yaml
+  - examples/sdlc-classic.yaml
+  - examples/retry-feedback.yaml
+
+platforms: []
+
+labels:
+  - software-factory
+  - sdlc
+  - state-machine
