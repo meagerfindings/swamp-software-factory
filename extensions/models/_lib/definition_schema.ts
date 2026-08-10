@@ -17,7 +17,7 @@
 import { z } from "npm:zod@4.3.6";
 
 // ---------------------------------------------------------------------------
-// The factory meta-schema: what a @mgreten/software-factory definition's
+// The factory meta-schema: what a @swamp/software-factory definition's
 // globalArguments must look like. The state machine lives here as data.
 // ---------------------------------------------------------------------------
 

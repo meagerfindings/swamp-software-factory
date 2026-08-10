@@ -1,7 +1,7 @@
 ---
 name: software-factory
 description: >
-  Drive @mgreten/software-factory runs: a fully generic, model-driven state
+  Drive @swamp/software-factory runs: a fully generic, model-driven state
   machine for software development lifecycles with adversarial review gates,
   verified testing, and human approvals. Use when the user wants to start
   factory work on a work item, check factory status, drive a run forward,
@@ -18,7 +18,7 @@ description: >
 
 # Software Factory Skill
 
-Drive `@mgreten/software-factory` model instances. A factory instance is a
+Drive `@swamp/software-factory` model instances. A factory instance is a
 **state machine defined as data** (in the definition's `globalArguments`) that
 serves **many work items concurrently** — every method takes `workItem`, and all
 run data is namespaced per work item. You are a generic interpreter: the
@@ -50,7 +50,7 @@ _means_.
    `swamp model search` / `swamp data query`; the human names which factory
    definition to use. Never infer one.
 6. **Ask the platform, not your memory.** When unsure of a method's arguments or
-   the definition format, `swamp model type describe @mgreten/software-factory`
+   the definition format, `swamp model type describe @swamp/software-factory`
    returns the full method/argument surface, and gate-failure messages tell you
    exactly what a transition still needs.
 
@@ -64,7 +64,7 @@ definition. You rarely need both at once.
 Create the factory once, then start as many work items on it as you like:
 
 ```
-swamp model create @mgreten/software-factory <factory-name>
+swamp model create @swamp/software-factory <factory-name>
 swamp model edit <factory-name>      # fill globalArguments: stages
 swamp model method run <factory-name> validate
 swamp model method run <factory-name> start --input workItem=<ref>
@@ -136,6 +136,6 @@ escalation/abort transition, or rethink the approach.
 | Lint a definition              | `swamp model method run <factory> validate`                                                                                                                                          |
 | Render the machine             | `swamp model method run <factory> describe`                                                                                                                                          |
 | Report a work item's history   | `swamp model method run <factory> summary --input workItem=<ref>`                                                                                                                    |
-| Discover the method surface    | `swamp model type describe @mgreten/software-factory`                                                                                                                                |
+| Discover the method surface    | `swamp model type describe @swamp/software-factory`                                                                                                                                |
 | List what's recorded           | `swamp data query 'modelName == "<factory>"' --select name`                                                                                                                          |
 | Fetch a payload field          | `swamp data query 'modelName == "<factory>" && name == "artifact-<workItem>-<artifact>"' --select attributes.payload.<field> --json` (see references/driving.md "Querying run data") |

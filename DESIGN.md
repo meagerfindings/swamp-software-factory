@@ -1,4 +1,4 @@
-# @mgreten/software-factory — Design
+# @swamp/software-factory — Design
 
 A fully generic, model-driven state machine for guiding agents through a
 software development lifecycle. Users configure **what** their factory requires
@@ -37,21 +37,21 @@ about.
 
 ## Architecture: one model type
 
-There is a single model type, `@mgreten/software-factory`. **An instance is a
+There is a single model type, `@swamp/software-factory`. **An instance is a
 factory that serves many work items concurrently** — create it once, run
 thousands of work items through it. Every method takes `workItem` as an
 argument, and all run data is namespaced per work item:
 
 ```
-swamp model create @mgreten/software-factory acme-sdlc
+swamp model create @swamp/software-factory acme-sdlc
 swamp model edit acme-sdlc      # fill in stages
 swamp model validate acme-sdlc  # platform validates against the meta-schema
 swamp model method run acme-sdlc start --input workItem=ISSUE-42
 ```
 
 ```
-@mgreten/software-factory instance
-  ├── definition file (models/@mgreten/software-factory/<id>.yaml)
+@swamp/software-factory instance
+  ├── definition file (models/@swamp/software-factory/<id>.yaml)
   │     globalArguments:
   │       stages: […]          ← the entire state machine, as data
   └── resources (runtime, namespaced per work item)
@@ -105,8 +105,8 @@ the state machine. The walkthrough factory (plan → adversarial plan review →
 implement → test → code review, with loop-backs):
 
 ```yaml
-# models/@mgreten/software-factory/<id>.yaml — created by `swamp model create`
-type: "@mgreten/software-factory"
+# models/@swamp/software-factory/<id>.yaml — created by `swamp model create`
+type: "@swamp/software-factory"
 name: acme-feature-factory
 version: 1
 globalArguments:
@@ -605,7 +605,7 @@ routes back to an agent stage.
 
 **Starting work is explicit.** The shipped skill is the front door: the user
 fires it ("start work on PAY-218"), the skill creates the instance
-(`swamp model create @mgreten/software-factory <name>`), fills `workItem` and
+(`swamp model create @swamp/software-factory <name>`), fills `workItem` and
 the stages — from an example, a team template instance (CEL-referenced), or
 scratch — has the human confirm the definition, then calls `start`. There are no
 implicit defaults: which machine a run executes is always written in its own
@@ -662,7 +662,7 @@ shared module (`_lib/summary.ts`) feeds both consumers:
 
 - the `summary` method logs the markdown (plus a `SUMMARY_JSON` line with the
   structured timeline) — works with zero configuration;
-- the `@mgreten/software-factory/work-item-summary` **report** (swamp's report
+- the `@swamp/software-factory/work-item-summary` **report** (swamp's report
   extension mechanism, `extensions/reports/`) persists the identical markdown
   and JSON twin as `report-*` data, browsable via `swamp report search` /
   `swamp report get`.
@@ -704,7 +704,7 @@ software-factory/
   manifest.yaml
   README.md
   extensions/models/
-    software_factory.ts        # @mgreten/software-factory — the one model type
+    software_factory.ts        # @swamp/software-factory — the one model type
     _lib/
       definition_schema.ts     # zod meta-schema for globalArguments (stages et al.)
       graph.ts                 # reachability / reference validation

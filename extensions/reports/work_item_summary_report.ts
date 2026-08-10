@@ -15,7 +15,7 @@
 // with Swamp. If not, see <https://www.gnu.org/licenses/>.
 
 /**
- * Work-item summary report for @mgreten/software-factory.
+ * Work-item summary report for @swamp/software-factory.
  *
  * Fires after the factory's `summary` method and persists the same
  * statically-rendered markdown history the method logs — every stage visit,
@@ -65,13 +65,13 @@ interface ReportContext {
   };
 }
 
-const FACTORY_TYPE = "@mgreten/software-factory";
+const FACTORY_TYPE = "@swamp/software-factory";
 
 /**
  * Renders the recorded history for successful or failed factory summary calls.
  */
 export const report = {
-  name: "@mgreten/software-factory/work-item-summary",
+  name: "@swamp/software-factory/work-item-summary",
   description:
     "Linear implementation history of a factory work item, rendered statically from its recorded run data",
   scope: "method",

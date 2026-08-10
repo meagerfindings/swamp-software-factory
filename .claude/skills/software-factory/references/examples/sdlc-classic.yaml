@@ -4,7 +4,7 @@
 # release, and UAT stages — expressed as configuration, not code.
 #
 # Usage:
-#   swamp model create @mgreten/software-factory my-sdlc-run
+#   swamp model create @swamp/software-factory my-sdlc-run
 #   swamp model edit my-sdlc-run  # paste under globalArguments; point the
 #                                 # testing workflow at a real one
 #   swamp model method run my-sdlc-run start --input workItem=<your-ref>
@@ -13,7 +13,7 @@
 # so the work-item-summary report only persists after `summary`:
 #   reports:
 #     require:
-#       - { name: "@mgreten/software-factory/work-item-summary", methods: [summary] }
+#       - { name: "@swamp/software-factory/work-item-summary", methods: [summary] }
 stages:
   - id: planning
     initial: true

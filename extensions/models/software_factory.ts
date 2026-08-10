@@ -1503,10 +1503,10 @@ async function checkState(
  * work item's isolated run state.
  */
 export const model = {
-  type: "@mgreten/software-factory",
+  type: "@swamp/software-factory",
   version: "2026.06.24.1",
   globalArguments: PlatformArgumentsSchema,
-  reports: ["@mgreten/software-factory/work-item-summary"],
+  reports: ["@swamp/software-factory/work-item-summary"],
 
   resources: {
     "state": {

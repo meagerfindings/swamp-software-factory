@@ -33,7 +33,7 @@ import {
 } from "./summary.ts";
 
 const WI = "TEST-1";
-const TYPE = "@mgreten/software-factory";
+const TYPE = "@swamp/software-factory";
 const MODEL_ID = "11111111-2222-3333-4444-555555555555";
 
 // ---------------------------------------------------------------------------

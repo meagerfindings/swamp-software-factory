@@ -8,8 +8,8 @@ every call. Start from one of the bundled examples in `references/examples/` —
 `retry-feedback.yaml` — then run `validate` and `describe` until clean and
 confirmed by the human.
 
-`swamp model create @mgreten/software-factory <name>` writes the definition file
-to `models/@mgreten/software-factory/<id>.yaml` in the repo — edit that file
+`swamp model create @swamp/software-factory <name>` writes the definition file
+to `models/@swamp/software-factory/<id>.yaml` in the repo — edit that file
 directly (it's git-tracked YAML). The stage document goes under
 `globalArguments:`; `reports:` and `checks:` selections are top-level keys
 beside it, not inside it.
@@ -326,7 +326,7 @@ globalArguments:
 
 ## Scoping the work-item summary report
 
-The extension ships a `@mgreten/software-factory/work-item-summary` report (a
+The extension ships a `@swamp/software-factory/work-item-summary` report (a
 model-type default) that persists the `summary` method's markdown history
 through swamp's report machinery. Method-scope reports run after **every**
 method and persist even empty results, so an unscoped default buries the stored
@@ -338,7 +338,7 @@ the definition file (a top-level key, sibling of `globalArguments`):
 reports:
   require:
     - {
-        name: "@mgreten/software-factory/work-item-summary",
+        name: "@swamp/software-factory/work-item-summary",
         methods: [summary],
       }
 ```

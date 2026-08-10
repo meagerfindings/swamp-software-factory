@@ -1,7 +1,7 @@
 # Minimal factory: one working stage, one gate, one terminal stage.
 #
 # Usage:
-#   swamp model create @mgreten/software-factory my-run
+#   swamp model create @swamp/software-factory my-run
 #   swamp model edit my-run     # paste this document under globalArguments
 #   swamp model method run my-run start --input workItem=<your-ref>
 stages:

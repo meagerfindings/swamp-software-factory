@@ -18,7 +18,7 @@ import { assert, assertEquals, assertStringIncludes } from "@std/assert";
 import { report } from "./work_item_summary_report.ts";
 
 const WI = "TEST-1";
-const TYPE = "@mgreten/software-factory";
+const TYPE = "@swamp/software-factory";
 const MODEL_ID = "11111111-2222-3333-4444-555555555555";
 
 function makeRepo(store: Map<string, Record<string, unknown>[]>) {
@@ -153,7 +153,7 @@ function makeContext(overrides: Record<string, unknown> = {}) {
 }
 
 Deno.test("report export has expected shape", () => {
-  assertEquals(report.name, "@mgreten/software-factory/work-item-summary");
+  assertEquals(report.name, "@swamp/software-factory/work-item-summary");
   assertEquals(report.scope, "method");
   assertEquals(typeof report.execute, "function");
   assert(report.labels.includes("software-factory"));

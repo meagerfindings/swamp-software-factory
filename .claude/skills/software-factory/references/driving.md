@@ -431,7 +431,7 @@ finding and resolution, approval, evidence record, and transition, including
 rework loops — built statically from the run data (no LLM; do not paraphrase it
 from memory when the human wants the record). A `SUMMARY_JSON` log line carries
 the same timeline structured for programmatic use. The
-`@mgreten/software-factory/work-item-summary` report persists the identical
+`@swamp/software-factory/work-item-summary` report persists the identical
 markdown; retrieve stored copies with `swamp report search` /
 `swamp report get`. Works on in-flight runs too (shows the current position).
 

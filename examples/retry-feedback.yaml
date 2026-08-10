@@ -19,7 +19,7 @@
 # the dispatch guard hard-fails with runaway-loop-suspected.
 #
 # Usage:
-#   swamp model create @mgreten/software-factory my-planner
+#   swamp model create @swamp/software-factory my-planner
 #   swamp model edit my-planner    # paste under globalArguments; point the
 #                                  # method at a real planner model
 #   swamp model method run my-planner start --input workItem=<your-ref>

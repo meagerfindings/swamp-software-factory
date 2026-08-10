@@ -34,6 +34,13 @@ import { model } from "./software_factory.ts";
 
 const WI = "TEST-1";
 
+Deno.test("model preserves upstream runtime namespace", () => {
+  assertEquals(model.type, "@swamp/software-factory");
+  assertEquals(model.reports, [
+    "@swamp/software-factory/work-item-summary",
+  ]);
+});
+
 interface LogLine {
   msg: string;
   props: Record<string, unknown>;
@@ -153,7 +160,7 @@ function buildHarness(definition?: Record<string, unknown>) {
 
   const context = {
     globalArgs: def,
-    modelType: "@mgreten/software-factory",
+    modelType: "@swamp/software-factory",
     modelId,
     logger: {
       info: (msg: string, props: Record<string, unknown>) =>

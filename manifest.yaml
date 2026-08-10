@@ -1,6 +1,6 @@
 manifestVersion: 1
 name: "@mgreten/software-factory"
-version: "2026.08.10.1"
+version: "2026.08.10.2"
 description: |
   A fully generic, model-driven state machine for guiding agents through a
   software development lifecycle. The entire machine — stages, transitions,
@@ -15,7 +15,7 @@ description: |
   method takes workItem, and all run data is namespaced per work item:
 
   ```
-  swamp model create @mgreten/software-factory my-factory
+  swamp model create @swamp/software-factory my-factory
   swamp model edit my-factory      # fill globalArguments: stages
   swamp model method run my-factory start --input workItem=ISSUE-42
   ```
@@ -47,7 +47,7 @@ description: |
   - `advance` — move along a gated transition
   - `summary` — full implementation history of a work item as markdown,
     rendered statically from the run data (no LLM); also persisted via the
-    @mgreten/software-factory/work-item-summary report
+    @swamp/software-factory/work-item-summary report
   - `validate` / `describe` — definition lint; Mermaid + tables
   - `reset` — destructive restart, requires confirm=reset
 
