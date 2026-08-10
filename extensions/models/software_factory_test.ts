@@ -233,6 +233,30 @@ function buildHarness(definition?: Record<string, unknown>) {
 
 type Harness = ReturnType<typeof buildHarness>;
 
+/** Match production: discovery exposes only the latest version per name. */
+function buildLatestOnlyHarness(definition?: Record<string, unknown>): Harness {
+  const harness = buildHarness(definition);
+  harness.context.dataRepository.findAllForModel = () =>
+    Promise.resolve(
+      [...harness.store].map(([name, versions]) => ({
+        name,
+        version: versions.length,
+      })),
+    );
+  return harness;
+}
+
+function latestNamed(
+  harness: Harness,
+  prefix: string,
+): Record<string, unknown> {
+  const name = [...harness.store.keys()].find((candidate) =>
+    candidate.startsWith(prefix)
+  );
+  assert(name !== undefined, `no resource starts with '${prefix}'`);
+  return latest(harness, name);
+}
+
 function latest(
   harness: Harness,
   instance: string,
@@ -928,8 +952,121 @@ Deno.test("record_dispatch: a human dispatch-override grants exactly one more di
   assertStringIncludes(err.message, "dispatch-override:planning");
 });
 
+Deno.test("latest-only repository: two distinct dispatch grants each add one consumable dispatch", async () => {
+  const harness = buildLatestOnlyHarness();
+  await startRun(harness);
+  await dispatch(harness);
+  await dispatch(harness);
+
+  for (const signature of ["worker-lost-attempt-2", "worker-lost-attempt-3"]) {
+    await model.methods.approve.execute(
+      {
+        workItem: WI,
+        gateId: "dispatch-override:planning",
+        actor: "adam",
+        note:
+          `gateId=dispatch-override:planning; failureSignature=${signature}`,
+      },
+      harness.context,
+    );
+  }
+
+  const grantNames = [...harness.store.keys()].filter((name) =>
+    name.startsWith("approval-TEST-1-dispatch-override:planning--grant-")
+  );
+  assertEquals(grantNames.length, 2);
+  await dispatch(harness); // granted attempt 3
+  await dispatch(harness); // granted attempt 4
+  await assertRejects(() => dispatch(harness), Error, "runaway-loop-suspected");
+});
+
+Deno.test("normalized override identity is idempotent across note order, whitespace, and actors", async () => {
+  const harness = buildLatestOnlyHarness();
+  await startRun(harness);
+  const input = {
+    workItem: WI,
+    gateId: "dispatch-override:planning",
+    actor: "adam",
+    note:
+      "gateId=dispatch-override:planning; failureSignature=idempotent-worker-loss",
+  };
+  await model.methods.approve.execute(input, harness.context);
+  await model.methods.approve.execute(
+    {
+      ...input,
+      actor: "different-human",
+      note:
+        " failureSignature = idempotent-worker-loss ; gateId = dispatch-override:planning ",
+    },
+    harness.context,
+  );
+
+  const grantName = [...harness.store.keys()].find((name) =>
+    name.startsWith("approval-TEST-1-dispatch-override:planning--grant-")
+  );
+  assert(grantName !== undefined);
+  const view = await loadRunView(
+    harness.context.dataRepository,
+    harness.context.modelType,
+    harness.context.modelId,
+    WI,
+    WI,
+  );
+  assertEquals(view.approvals.get(input.gateId)?.length, 1);
+  assertEquals(latest(harness, grantName).actor, "different-human");
+});
+
+Deno.test("latest-only repository: a legacy fixed-name dispatch grant still counts", async () => {
+  const harness = buildLatestOnlyHarness();
+  await startRun(harness);
+  const state = latest(harness, "state-TEST-1");
+  harness.store.set("approval-TEST-1-dispatch-override:planning", [{
+    gateId: "dispatch-override:planning",
+    workItem: WI,
+    decision: "approved",
+    actor: "legacy-human",
+    note:
+      "gateId=dispatch-override:planning; failureSignature=legacy-worker-loss",
+    stageId: "planning",
+    cycle: 1,
+    decidedAt: state.startedAt,
+  }]);
+  await dispatch(harness);
+  await dispatch(harness);
+  await dispatch(harness); // the migrated legacy grant
+  await assertRejects(() => dispatch(harness), Error, "runaway-loop-suspected");
+});
+
+Deno.test("latest-only repository: rejecting a legacy dispatch grant revokes it", async () => {
+  const harness = buildLatestOnlyHarness();
+  await startRun(harness);
+  const name = "approval-TEST-1-dispatch-override:planning";
+  const state = latest(harness, "state-TEST-1");
+  harness.store.set(name, [{
+    gateId: "dispatch-override:planning",
+    workItem: WI,
+    decision: "approved",
+    actor: "legacy-human",
+    stageId: "planning",
+    cycle: 1,
+    decidedAt: state.startedAt,
+  }]);
+  await model.methods.reject.execute(
+    {
+      workItem: WI,
+      gateId: "dispatch-override:planning",
+      actor: "legacy-human",
+      note: "revoke mistaken recovery grant",
+    },
+    harness.context,
+  );
+  await dispatch(harness);
+  await dispatch(harness);
+  await assertRejects(() => dispatch(harness), Error, "runaway-loop-suspected");
+});
+
 Deno.test("record_dispatch: a dispatch-override does not leak into a later entry", async () => {
-  const harness = buildHarness();
+  const harness = buildLatestOnlyHarness();
   await startRun(harness);
   await dispatch(harness);
   await dispatch(harness);
@@ -1451,6 +1588,159 @@ Deno.test("cycle limits: entry past maxCycles parks for human override", async (
   await assertRejects(() => advance(harness, "submit"), Error);
 });
 
+Deno.test("latest-only repository: repeated cycle grants accumulate", async () => {
+  const harness = buildLatestOnlyHarness();
+  await startRun(harness);
+  for (const signature of ["review-limit-3", "review-limit-4"]) {
+    await model.methods.approve.execute(
+      {
+        workItem: WI,
+        gateId: "cycle-override:review",
+        actor: "adam",
+        note: `gateId=cycle-override:review; failureSignature=${signature}`,
+      },
+      harness.context,
+    );
+  }
+  await recordPlan(harness);
+  for (let cycle = 1; cycle <= 4; cycle++) {
+    await advance(harness, "submit");
+    if (cycle < 4) await advance(harness, "rework");
+  }
+  assertEquals(latest(harness, "state-TEST-1").cycles, {
+    planning: 4,
+    review: 4,
+  });
+});
+
+Deno.test("latest-only repository: rejecting a legacy cycle grant revokes it", async () => {
+  const harness = buildLatestOnlyHarness();
+  await startRun(harness);
+  const state = latest(harness, "state-TEST-1");
+  harness.store.set("approval-TEST-1-cycle-override:review", [{
+    gateId: "cycle-override:review",
+    workItem: WI,
+    decision: "approved",
+    actor: "legacy-human",
+    stageId: "planning",
+    cycle: 1,
+    decidedAt: state.startedAt,
+  }]);
+  await model.methods.reject.execute(
+    {
+      workItem: WI,
+      gateId: "cycle-override:review",
+      actor: "legacy-human",
+      note: "revoke mistaken recovery grant",
+    },
+    harness.context,
+  );
+  await recordPlan(harness);
+  for (let cycle = 1; cycle <= 2; cycle++) {
+    await advance(harness, "submit");
+    await advance(harness, "rework");
+  }
+  await assertRejects(() => advance(harness, "submit"), Error, "limit 2");
+});
+
+Deno.test("suffixed approval readers fail closed on malformed canonical identity", async () => {
+  const mutations: Array<[
+    string,
+    (record: Record<string, unknown>) => string | undefined,
+  ]> = [
+    [
+      "malformed suffix",
+      () => "approval-TEST-1-dispatch-override:planning--grant-nope",
+    ],
+    ["ordinary gate", (record) => {
+      record.gateId = "abort-confirmation";
+      return "approval-TEST-1-abort-confirmation--grant-nope";
+    }],
+    ["wrong decision", (record) => {
+      record.decision = "rejected";
+      return undefined;
+    }],
+    ["scope mismatch", (record) => {
+      (record.recoveryGrantIdentity as Record<string, unknown>).scopeCycle = 2;
+      return undefined;
+    }],
+    ["era mismatch", (record) => {
+      (record.recoveryGrantIdentity as Record<string, unknown>).runEra =
+        "old-era";
+      return undefined;
+    }],
+  ];
+  for (const [label, mutate] of mutations) {
+    const harness = buildLatestOnlyHarness();
+    await startRun(harness);
+    await model.methods.approve.execute(
+      {
+        workItem: WI,
+        gateId: "dispatch-override:planning",
+        actor: "adam",
+        note: "gateId=dispatch-override:planning; failureSignature=worker-loss",
+      },
+      harness.context,
+    );
+    const validName = [...harness.store.keys()].find((name) =>
+      name.includes("dispatch-override:planning--grant-")
+    )!;
+    const record = structuredClone(latest(harness, validName));
+    harness.store.delete(validName);
+    harness.store.set(mutate(record) ?? validName, [record]);
+    const view = await loadRunView(
+      harness.context.dataRepository,
+      harness.context.modelType,
+      harness.context.modelId,
+      WI,
+      WI,
+    );
+    assertEquals(view.approvals.size, 0, label);
+  }
+});
+
+Deno.test("latest-only repository: dispatch grant with mutated stageId is absent from view, authorization, and CEL", async () => {
+  const harness = buildLatestOnlyHarness();
+  await startRun(harness);
+  await model.methods.approve.execute(
+    {
+      workItem: WI,
+      gateId: "dispatch-override:planning",
+      actor: "adam",
+      note: "gateId=dispatch-override:planning; failureSignature=worker-loss",
+    },
+    harness.context,
+  );
+  const grantName = [...harness.store.keys()].find((name) =>
+    name.startsWith("approval-TEST-1-dispatch-override:planning--grant-")
+  );
+  assert(grantName !== undefined);
+  latest(harness, grantName).stageId = "review";
+
+  const view = await loadRunView(
+    harness.context.dataRepository,
+    harness.context.modelType,
+    harness.context.modelId,
+    WI,
+    WI,
+  );
+  assertEquals(view.approvals.has("dispatch-override:planning"), false);
+  const cel = buildCelContext({
+    view,
+    workItem: WI,
+    state: view.state,
+  } as unknown as GateContext);
+  assertEquals(
+    "dispatch_override_planning" in
+      (cel.approvals as Record<string, unknown>),
+    false,
+  );
+
+  await dispatch(harness);
+  await dispatch(harness);
+  await assertRejects(() => dispatch(harness), Error, "runaway-loop-suspected");
+});
+
 // ---------------------------------------------------------------------------
 // approve / reject identity rules
 // ---------------------------------------------------------------------------
@@ -1589,8 +1879,47 @@ Deno.test("approve: exact recovery gate and failure signature accepts and preser
       { workItem: WI, gateId, actor: "adam", note },
       harness.context,
     );
-    assertEquals(latest(harness, `approval-TEST-1-${gateId}`).note, note);
+    assertEquals(
+      latestNamed(harness, `approval-TEST-1-${gateId}--grant-`).note,
+      note,
+    );
   }
+});
+
+Deno.test("latest-only repository: ordinary approval decisions retain fixed-name latest semantics", async () => {
+  const harness = buildLatestOnlyHarness();
+  await startRun(harness);
+  await model.methods.approve.execute(
+    { workItem: WI, gateId: "abort-confirmation", actor: "adam" },
+    harness.context,
+  );
+  await model.methods.reject.execute(
+    {
+      workItem: WI,
+      gateId: "abort-confirmation",
+      actor: "adam",
+      note: "keep working",
+    },
+    harness.context,
+  );
+  assertEquals(
+    [...harness.store.keys()].filter((name) =>
+      name.startsWith("approval-TEST-1-abort-confirmation")
+    ),
+    ["approval-TEST-1-abort-confirmation"],
+  );
+  const view = await loadRunView(
+    harness.context.dataRepository,
+    harness.context.modelType,
+    harness.context.modelId,
+    WI,
+    WI,
+  );
+  assertEquals(view.approvals.get("abort-confirmation")?.length, 1);
+  assertEquals(
+    view.approvals.get("abort-confirmation")?.[0].decision,
+    "rejected",
+  );
 });
 
 Deno.test("approval records are work-item- and cycle-scoped envelopes", async () => {
@@ -2080,7 +2409,10 @@ Deno.test("cycle overrides are structural and never carry a subject", async () =
     },
     harness.context,
   );
-  const record = latest(harness, "approval-TEST-1-cycle-override:review");
+  const record = latestNamed(
+    harness,
+    "approval-TEST-1-cycle-override:review--grant-",
+  );
   assertEquals(record.subjectStatus, "unbound");
   assertEquals(record.subject, undefined);
 });

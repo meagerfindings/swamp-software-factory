@@ -73,6 +73,8 @@ import {
   liveValidation,
   loadAllRunStates,
   loadRunView,
+  overrideApprovalInstance,
+  overrideGrantDigest,
   OVERVIEW_SLUG,
   RunStateSchema,
   stateInstance,
@@ -2835,9 +2837,9 @@ async function recordDecision(
     DISPATCH_OVERRIDE_PREFIX,
   );
   const isOverride = isCycleOverride || isDispatchOverride;
-  if (decision.decision === "approved" && isOverride) {
-    validateRecoveryApprovalNote(decision);
-  }
+  const recoveryFields = decision.decision === "approved" && isOverride
+    ? validateRecoveryApprovalNote(decision)
+    : undefined;
 
   const handles = await noteDefinitionDrift(
     context,
@@ -2911,10 +2913,56 @@ async function recordDecision(
       subjectContractDigest: subjectContract.digest,
     },
   };
+  let approvalName = approvalInstance(slug, decision.gateId);
+  if (recoveryFields !== undefined) {
+    // Only approved recovery grants accumulate. Identity is authorization
+    // scope, not audit prose: actor and verbatim note remain on the record but
+    // cannot mint another allowance for the same normalized failure.
+    const scopeStageId = decision.gateId.slice(
+      isCycleOverride
+        ? CYCLE_OVERRIDE_PREFIX.length
+        : DISPATCH_OVERRIDE_PREFIX.length,
+    );
+    const grantIdentity = {
+      format: "override-grant-v1" as const,
+      runEra: state.startedAt,
+      workItem: record.workItem,
+      gateId: record.gateId,
+      scopeStageId,
+      scopeCycle: isDispatchOverride ? record.cycle : null,
+      failureSignature: recoveryFields.failureSignature,
+    };
+    record.recoveryGrantIdentity = grantIdentity;
+    const grantDigest = await overrideGrantDigest(grantIdentity);
+    approvalName = overrideApprovalInstance(slug, decision.gateId, grantDigest);
+
+    // Fail closed if the deterministic name is already occupied by different
+    // content (hash collision or corrupt/manual write). An exact retry is safe:
+    // it may create another version, but latest-only readers still count one
+    // logical grant.
+    const existing = await context.dataRepository.getContent(
+      context.modelType,
+      context.modelId,
+      approvalName,
+    );
+    if (existing !== null) {
+      const parsed = ApprovalRecordSchema.safeParse(
+        JSON.parse(new TextDecoder().decode(existing)),
+      );
+      const same = parsed.success && parsed.data.decision === "approved" &&
+        canonicalJson(parsed.data.recoveryGrantIdentity) ===
+          canonicalJson(grantIdentity);
+      if (!same) {
+        throw new Error(
+          `Recovery grant identity collision at '${approvalName}'; refusing to overwrite it.`,
+        );
+      }
+    }
+  }
   handles.push(
     await context.writeResource(
       "approval",
-      approvalInstance(slug, decision.gateId),
+      approvalName,
       record as unknown as Record<string, unknown>,
     ),
   );
@@ -2972,7 +3020,7 @@ const GENERIC_ASSENT = new Set(["approve", "approved", "yes"]);
  */
 function validateRecoveryApprovalNote(
   decision: { gateId: string; note?: string },
-): void {
+): { gateId: string; failureSignature: string } {
   const note = decision.note;
   if (note === undefined || note.trim().length === 0) {
     throw new Error(
@@ -3029,6 +3077,10 @@ function validateRecoveryApprovalNote(
       `Recovery approval note must contain exactly gateId and failureSignature.`,
     );
   }
+  return {
+    gateId: fields.get("gateId")!,
+    failureSignature: fields.get("failureSignature")!,
+  };
 }
 
 /**

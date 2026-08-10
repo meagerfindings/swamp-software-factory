@@ -79,6 +79,55 @@ export function approvalInstance(slug: string, gateId: string): string {
   return `${APPROVAL_PREFIX}${slug}-${gateId}`;
 }
 
+/**
+ * Immutable identity for an accumulating recovery grant. Ordinary product
+ * decisions intentionally continue to use `approvalInstance` so their latest
+ * version replaces the previous decision.
+ */
+export function overrideApprovalInstance(
+  slug: string,
+  gateId: string,
+  grantDigest: string,
+): string {
+  return `${approvalInstance(slug, gateId)}--grant-${grantDigest}`;
+}
+
+export interface OverrideGrantIdentity {
+  format: "override-grant-v1";
+  runEra: string;
+  workItem: string;
+  gateId: string;
+  scopeStageId: string;
+  scopeCycle: number | null;
+  failureSignature: string;
+}
+
+/** Canonical serialization; field order is part of the persisted v1 format. */
+export function canonicalOverrideGrantIdentity(
+  identity: OverrideGrantIdentity,
+): string {
+  return JSON.stringify({
+    format: identity.format,
+    runEra: identity.runEra,
+    workItem: identity.workItem,
+    gateId: identity.gateId,
+    scopeStageId: identity.scopeStageId,
+    scopeCycle: identity.scopeCycle,
+    failureSignature: identity.failureSignature,
+  });
+}
+
+export async function overrideGrantDigest(
+  identity: OverrideGrantIdentity,
+): Promise<string> {
+  const bytes = new TextEncoder().encode(
+    canonicalOverrideGrantIdentity(identity),
+  );
+  const digest = await crypto.subtle.digest("SHA-256", bytes);
+  return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+}
+
 export function validationInstance(slug: string, target: string): string {
   return `${VALIDATION_PREFIX}${slug}-${target}`;
 }

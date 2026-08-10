@@ -152,13 +152,27 @@ export const ApprovalRecordSchema = z.object({
     subjectContractVersion: z.string(),
     subjectContractDigest: z.string(),
   }).optional(),
+  /** Canonical identity for an accumulating approved recovery grant. */
+  recoveryGrantIdentity: z.object({
+    format: z.literal("override-grant-v1"),
+    runEra: z.string(),
+    workItem: z.string(),
+    gateId: z.string(),
+    scopeStageId: z.string(),
+    scopeCycle: z.number().int().positive().nullable(),
+    failureSignature: z.string(),
+  }).optional(),
 });
 
 export type ApprovalRecord = z.infer<typeof ApprovalRecordSchema>;
 
 /** Preserve the pre-comparison gate/CEL approval contract. */
 function gateVisibleApproval(record: ApprovalRecord): ApprovalRecord {
-  const { comparisonIdentity: _comparisonIdentity, ...visible } = record;
+  const {
+    comparisonIdentity: _comparisonIdentity,
+    recoveryGrantIdentity: _recoveryGrantIdentity,
+    ...visible
+  } = record;
   return visible;
 }
 
@@ -200,6 +214,8 @@ export {
   evidenceInstance,
   JOURNAL_PREFIX,
   journalInstance,
+  overrideApprovalInstance,
+  overrideGrantDigest,
   OVERVIEW_SLUG,
   STATE_PREFIX,
   stateInstance,
@@ -215,6 +231,8 @@ import {
   approvalInstance,
   ARTIFACT_PREFIX,
   EVIDENCE_PREFIX,
+  overrideApprovalInstance,
+  overrideGrantDigest,
   STATE_PREFIX,
   stateInstance,
   VALIDATION_PREFIX,
@@ -298,6 +316,36 @@ function decode(content: Uint8Array): Record<string, unknown> {
   >;
 }
 
+async function validSuffixedOverrideApproval(
+  slug: string,
+  name: string,
+  record: ApprovalRecord,
+  runEra: string | undefined,
+): Promise<boolean> {
+  const identity = record.recoveryGrantIdentity;
+  if (identity === undefined || record.decision !== "approved") return false;
+  const cyclePrefix = "cycle-override:";
+  const dispatchPrefix = "dispatch-override:";
+  const isCycle = record.gateId.startsWith(cyclePrefix);
+  const isDispatch = record.gateId.startsWith(dispatchPrefix);
+  if (!isCycle && !isDispatch) return false;
+  const scopeStageId = record.gateId.slice(
+    isCycle ? cyclePrefix.length : dispatchPrefix.length,
+  );
+  if (
+    runEra === undefined || identity.runEra !== runEra ||
+    identity.workItem !== record.workItem ||
+    identity.gateId !== record.gateId ||
+    identity.failureSignature.trim().length === 0 ||
+    scopeStageId.length === 0 ||
+    identity.scopeStageId !== scopeStageId ||
+    (isDispatch && record.stageId !== identity.scopeStageId) ||
+    identity.scopeCycle !== (isDispatch ? record.cycle : null)
+  ) return false;
+  const digest = await overrideGrantDigest(identity);
+  return name === overrideApprovalInstance(slug, record.gateId, digest);
+}
+
 export async function loadRunView(
   repo: DataRepositoryLike,
   modelType: unknown,
@@ -331,20 +379,24 @@ export async function loadRunView(
     byName.set(entry.name, versions);
   }
 
+  // Load state first: canonical accumulating-grant identity is run-era scoped.
+  const stateVersions = byName.get(stateName);
+  if (stateVersions !== undefined) {
+    const latestStateVersion = Math.max(...stateVersions);
+    const content = await repo.getContent(
+      modelType,
+      modelId,
+      stateName,
+      latestStateVersion,
+    );
+    if (content !== null) view.state = RunStateSchema.parse(decode(content));
+  }
+
   for (const [name, versions] of byName) {
     versions.sort((a, b) => a - b);
     const latestVersion = versions[versions.length - 1];
 
     if (name === stateName) {
-      const content = await repo.getContent(
-        modelType,
-        modelId,
-        name,
-        latestVersion,
-      );
-      if (content !== null) {
-        view.state = RunStateSchema.parse(decode(content));
-      }
       continue;
     }
 
@@ -401,7 +453,16 @@ export async function loadRunView(
 
     if (name.startsWith(approvalPrefix)) {
       const records: ApprovalRecord[] = [];
-      for (const version of versions) {
+      const isFixedOverride = !name.includes("--grant-") &&
+        (name.startsWith(`${approvalPrefix}cycle-override:`) ||
+          name.startsWith(`${approvalPrefix}dispatch-override:`));
+      // Legacy fixed recovery decisions retain latest-decision semantics.
+      // Suffixed grants are immutable logical resources: versions are retries,
+      // not additional grants. Ordinary decision history remains gate-visible.
+      const visibleVersions = isFixedOverride || name.includes("--grant-")
+        ? [latestVersion]
+        : versions;
+      for (const version of visibleVersions) {
         const content = await repo.getContent(
           modelType,
           modelId,
@@ -410,14 +471,24 @@ export async function loadRunView(
         );
         if (content !== null) {
           const record = ApprovalRecordSchema.parse(decode(content));
+          const fixedName = approvalInstance(slug, record.gateId);
+          const validName = name === fixedName ||
+            (name.startsWith(`${fixedName}--grant-`) &&
+              await validSuffixedOverrideApproval(
+                slug,
+                name,
+                record,
+                view.state?.startedAt,
+              ));
           if (
-            approvalInstance(slug, record.gateId) === name &&
+            validName &&
             record.workItem === expectedWorkItem
           ) records.push(gateVisibleApproval(record));
         }
       }
       if (records.length > 0) {
-        view.approvals.set(records[0].gateId, records);
+        const existing = view.approvals.get(records[0].gateId) ?? [];
+        view.approvals.set(records[0].gateId, [...existing, ...records]);
       }
 
       const gateId = records[0]?.gateId ?? name.slice(approvalPrefix.length);
@@ -466,8 +537,17 @@ export async function loadRunView(
                 continue;
               }
               const record = ApprovalRecordSchema.parse(decode(content));
+              const fixedName = approvalInstance(slug, record.gateId);
+              const validName = name === fixedName ||
+                (name.startsWith(`${fixedName}--grant-`) &&
+                  await validSuffixedOverrideApproval(
+                    slug,
+                    name,
+                    record,
+                    view.state?.startedAt,
+                  ));
               if (
-                approvalInstance(slug, record.gateId) !== name ||
+                !validName ||
                 record.workItem !== expectedWorkItem
               ) {
                 issues.push({
@@ -493,8 +573,14 @@ export async function loadRunView(
           });
         }
       }
-      if (history.length > 0) view.approvalHistory.set(gateId, history);
-      if (issues.length > 0) view.approvalHistoryIssues.set(gateId, issues);
+      if (history.length > 0) {
+        const existing = view.approvalHistory.get(gateId) ?? [];
+        view.approvalHistory.set(gateId, [...existing, ...history]);
+      }
+      if (issues.length > 0) {
+        const existing = view.approvalHistoryIssues.get(gateId) ?? [];
+        view.approvalHistoryIssues.set(gateId, [...existing, ...issues]);
+      }
     }
   }
 

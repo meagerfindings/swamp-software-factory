@@ -432,10 +432,18 @@ makes an LLM call.
   evidence's declared schema (or, for a stage's `resultEvidence`, the built-in
   outcome schema). Opaque to gates, but not unvalidated.
 - `approval` —
-  `{gateId, workItem, decision: approved|rejected, actor, note, stageId, cycle, subjectStatus?, subject?}`;
+  `{gateId, workItem, decision: approved|rejected, actor, note, stageId, cycle, subjectStatus?, subject?, recoveryGrantIdentity?}`;
   subject-bound decisions persist the canonical manifest, algorithm, and digest
-  while legacy records remain readable; instances
-  `approval-<workItem>-<gateId>`.
+  while legacy records remain readable. Ordinary gate decisions use
+  `approval-<workItem>-<gateId>` and retain latest-decision semantics. Cycle
+  and dispatch recovery **approvals** accumulate under deterministic
+  `approval-<workItem>-<gateId>--grant-<digest>` instances; readers also count
+  the legacy fixed-name recovery instance for backward compatibility. Recovery
+  rejections always use that fixed name, so a rejection revokes a legacy grant.
+  Grant identity includes run era, work item, override gate, stage/cycle scope,
+  and normalized failure signature; actor and verbatim note are audit-only.
+  Recording relies on swamp's normal per-model method lock; no separate CAS or
+  cross-resource transaction protocol is introduced.
 - `validation` —
   `{target, targetKind, workItem, stageId, cycle, attempt, cleared, rejected?, errors, recordedAt}`;
   instances `validation-<workItem>-<target>`. A recorded payload-validation
