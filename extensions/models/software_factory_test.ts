@@ -22,10 +22,12 @@ import {
 } from "@std/assert";
 import { Environment } from "cel-js";
 import { canonicalJson, sha256Hex } from "./_lib/approval_subject.ts";
+import { AuthorityChallengeEventSchema } from "./_lib/authority_challenge.ts";
 import { buildCelContext } from "./_lib/gates.ts";
 import type { GateContext } from "./_lib/gates.ts";
 import { loadRunView } from "./_lib/run_data.ts";
-import { model } from "./software_factory.ts";
+import { JournalEntrySchema } from "./_lib/run_data.ts";
+import { model, persistAuthorityChallenge } from "./software_factory.ts";
 
 // ---------------------------------------------------------------------------
 // Harness: in-memory versioned store + definition repository + real CEL.
@@ -2043,6 +2045,359 @@ async function reachBoundReview(harness: Harness, summary = "build the thing") {
     harness.context,
   );
 }
+
+Deno.test("mint_authority_challenge: strict engine-minted record grants nothing", async () => {
+  const harness = buildHarness(boundDefinition());
+  await reachBoundReview(harness);
+  const strict = model.methods.mint_authority_challenge.arguments.safeParse({
+    workItem: WI,
+    gateId: "plan-approval",
+    digest: "caller",
+    manifest: {},
+    nonce: "caller",
+    issuedAt: "caller",
+    expiresAt: "caller",
+    actor: "caller",
+    principal: "caller",
+    channel: "caller",
+    certificationDigest: "caller",
+  });
+  assertEquals(strict.success, false);
+
+  await model.methods.mint_authority_challenge.execute(
+    { workItem: WI, gateId: "plan-approval" },
+    harness.context,
+  );
+  const challenge = AuthorityChallengeEventSchema.parse(
+    latestNamed(harness, "authority-challenge-"),
+  );
+  assertEquals(challenge.authority, "non-authorizing");
+  assertEquals(
+    (challenge.binding as Record<string, unknown>).oneApprovalReady,
+    false,
+  );
+  assertEquals(harness.store.has("approval-TEST-1-plan-approval"), false);
+  const blocked = await assertRejects(() => advance(harness, "approve"), Error);
+  assertStringIncludes(blocked.message, "awaiting human approval");
+});
+
+Deno.test("mint_authority_challenge: 51 exact records remain independent of 201 journal appends", async () => {
+  const harness = buildHarness(boundDefinition());
+  await reachBoundReview(harness);
+  const journalBefore = harness.store.get("journal-TEST-1")?.length;
+  const stateBefore = structuredClone(latest(harness, "state-TEST-1"));
+  for (let i = 0; i < 51; i++) {
+    await model.methods.mint_authority_challenge.execute(
+      { workItem: WI, gateId: "plan-approval" },
+      harness.context,
+    );
+  }
+  const names = [...harness.store.keys()].filter((name) =>
+    name.startsWith("authority-challenge-")
+  );
+  assertEquals(names.length, 51);
+  assertEquals(
+    names.every((name) => harness.store.get(name)?.length === 1),
+    true,
+  );
+  const emitted = new Map(names.map((name) => [
+    name,
+    JSON.stringify(latest(harness, name)),
+  ]));
+  for (let i = 0; i < 201; i++) {
+    const entry = JournalEntrySchema.parse({
+      event: "ordinary_test_event",
+      workItem: WI,
+      stageId: "review",
+      summary: `ordinary ${i}`,
+      at: new Date(1_800_000_000_000 + i).toISOString(),
+    });
+    await harness.context.writeResource("journal", "journal-TEST-1", entry);
+  }
+  for (const name of names) {
+    const exact = await harness.context.dataRepository.getContent(
+      harness.context.modelType,
+      harness.context.modelId,
+      name,
+      1,
+    );
+    assert(exact !== null);
+    const decoded = new TextDecoder().decode(exact);
+    const parsed = AuthorityChallengeEventSchema.parse(JSON.parse(decoded));
+    assertEquals(decoded, emitted.get(name));
+    assertEquals(
+      canonicalJson(parsed),
+      canonicalJson(JSON.parse(emitted.get(name)!)),
+    );
+  }
+  assertEquals(model.resources.authority_challenge.garbageCollection, 1);
+  assertEquals(model.resources.journal.garbageCollection, 200);
+  assertEquals(
+    harness.store.get("journal-TEST-1")?.length,
+    (journalBefore ?? 0) + 201,
+  );
+  assertEquals(harness.store.has("approval-TEST-1-plan-approval"), false);
+  assertEquals(latest(harness, "state-TEST-1"), stateBefore);
+});
+
+for (
+  const [label, subject] of [
+    ["includeRun:false", {
+      artifacts: ["approval-input"],
+      evidence: ["change-request"],
+      includeRun: false,
+    }],
+    ["includeDefinition:false", {
+      artifacts: ["approval-input"],
+      evidence: ["change-request"],
+      includeDefinition: false,
+    }],
+    ["both optional identities false", {
+      artifacts: ["approval-input"],
+      evidence: ["change-request"],
+      includeRun: false,
+      includeDefinition: false,
+    }],
+  ] as const
+) {
+  Deno.test(`mint_authority_challenge: supports ${label}`, async () => {
+    const harness = buildHarness(boundDefinition(subject));
+    await reachBoundReview(harness);
+    await model.methods.mint_authority_challenge.execute(
+      { workItem: WI, gateId: "plan-approval" },
+      harness.context,
+    );
+    const challenge = latestNamed(harness, "authority-challenge-");
+    const manifest = (challenge.display as Record<string, unknown>)
+      .manifest as Record<string, unknown>;
+    assertEquals("run" in manifest, subject.includeRun !== false);
+    assertEquals(
+      "definition" in manifest,
+      subject.includeDefinition !== false,
+    );
+    assertEquals(harness.store.has("approval-TEST-1-plan-approval"), false);
+  });
+}
+
+async function occupiedAuthorityChallengeFixture() {
+  const definition = boundDefinition();
+  const harness = buildLatestOnlyHarness(definition);
+  await reachBoundReview(harness);
+  await model.methods.mint_authority_challenge.execute(
+    { workItem: WI, gateId: "plan-approval" },
+    harness.context,
+  );
+  const name = [...harness.store.keys()].find((candidate) =>
+    candidate.startsWith("authority-challenge-")
+  )!;
+  const event = latest(harness, name) as ReturnType<
+    typeof AuthorityChallengeEventSchema.parse
+  >;
+  const state = latest(harness, "state-TEST-1");
+  const expected = {
+    resourceName: name,
+    modelType: harness.context.modelType,
+    modelId: harness.context.modelId,
+    modelInstanceName: harness.context.definition.name,
+    definitionName: harness.context.definition.name,
+    definitionVersion: harness.context.definition.version,
+    definitionHash: await sha256Hex(canonicalJson(definition)),
+    workItem: WI,
+    stageId: "review",
+    cycle: 1,
+    runEra: String(state.startedAt),
+    gateId: "plan-approval",
+    transition: "approve",
+    subject: {
+      artifacts: ["approval-input"],
+      evidence: ["change-request"],
+    },
+    minApprovals: 1,
+  };
+  return { harness, event, expected, name };
+}
+
+Deno.test("authority challenge persistence replays exact v1 without writing", async () => {
+  const { harness, event, expected, name } =
+    await occupiedAuthorityChallengeFixture();
+  const writesBeforeReplay = harness.writeOrder.length;
+  assertEquals(
+    await persistAuthorityChallenge(harness.context, event, expected),
+    { name, version: 1 },
+  );
+  assertEquals(harness.writeOrder.length, writesBeforeReplay);
+});
+
+Deno.test("mint_authority_challenge preserves the listVersions repository receiver", async () => {
+  const harness = buildHarness(boundDefinition());
+  await reachBoundReview(harness);
+  const repository = harness.context.dataRepository;
+  const stores = new WeakMap<object, typeof harness.store>([
+    [repository, harness.store],
+  ]);
+  repository.listVersions = function (
+    _type: unknown,
+    _modelId: string,
+    dataName: string,
+  ) {
+    const store = stores.get(this);
+    if (store === undefined) {
+      throw new Error("listVersions called with a detached receiver");
+    }
+    return Promise.resolve((store.get(dataName) ?? []).map((_, i) => i + 1));
+  };
+
+  const result = await model.methods.mint_authority_challenge.execute(
+    { workItem: WI, gateId: "plan-approval" },
+    harness.context,
+  );
+  const handle = result.dataHandles[0];
+  assertStringIncludes(handle.name, "authority-challenge-");
+  assertEquals(handle.version, 1);
+  assertEquals(harness.store.get(handle.name)?.length, 1);
+  AuthorityChallengeEventSchema.parse(latest(harness, handle.name));
+});
+
+Deno.test("authority challenge persistence rejects malformed v1 before writing", async () => {
+  const { harness, event, expected, name } =
+    await occupiedAuthorityChallengeFixture();
+  harness.store.set(name, [{ malformed: true }]);
+  const writesBefore = harness.writeOrder.length;
+  await assertRejects(
+    () => persistAuthorityChallenge(harness.context, event, expected),
+    Error,
+    "occupied state is invalid",
+  );
+  assertEquals(harness.writeOrder.length, writesBefore);
+});
+
+Deno.test("authority challenge persistence rejects missing v1 with only a later version before writing", async () => {
+  const { harness, event, expected, name } =
+    await occupiedAuthorityChallengeFixture();
+  const bytes = new TextEncoder().encode(JSON.stringify(event));
+  harness.context.dataRepository.findAllForModel = () =>
+    Promise.resolve([{ name, version: 2 }]);
+  harness.context.dataRepository.listVersions = () => Promise.resolve([2]);
+  harness.context.dataRepository.getContent = (
+    _type: unknown,
+    _modelId: string,
+    dataName: string,
+    version?: number,
+  ) => Promise.resolve(dataName === name && version !== 1 ? bytes : null);
+
+  const writesBefore = harness.writeOrder.length;
+  await assertRejects(
+    () => persistAuthorityChallenge(harness.context, event, expected),
+    Error,
+    "occupied state is not exact version 1",
+  );
+  assertEquals(harness.writeOrder.length, writesBefore);
+});
+
+Deno.test("authority challenge persistence rejects retained version gap [1,3] before writing", async () => {
+  const { harness, event, expected, name } =
+    await occupiedAuthorityChallengeFixture();
+  const bytes = new TextEncoder().encode(JSON.stringify(event));
+  harness.context.dataRepository.findAllForModel = () =>
+    Promise.resolve([{ name, version: 3 }]);
+  harness.context.dataRepository.listVersions = () => Promise.resolve([1, 3]);
+  harness.context.dataRepository.getContent = (
+    _type: unknown,
+    _modelId: string,
+    dataName: string,
+    _version?: number,
+  ) => Promise.resolve(dataName === name ? bytes : null);
+
+  const writesBefore = harness.writeOrder.length;
+  await assertRejects(
+    () => persistAuthorityChallenge(harness.context, event, expected),
+    Error,
+    "occupied state is not exact version 1",
+  );
+  assertEquals(harness.writeOrder.length, writesBefore);
+});
+
+Deno.test("authority challenge persistence rejects valid v1 plus a later version before writing", async () => {
+  const { harness, event, expected, name } =
+    await occupiedAuthorityChallengeFixture();
+  harness.store.get(name)!.push(structuredClone(event));
+
+  const writesBefore = harness.writeOrder.length;
+  await assertRejects(
+    () => persistAuthorityChallenge(harness.context, event, expected),
+    Error,
+    "occupied state is not exact version 1",
+  );
+  assertEquals(harness.writeOrder.length, writesBefore);
+});
+
+Deno.test("authority challenge persistence compares canonical content for a valid-shaped collision", async () => {
+  const { harness, event, expected } =
+    await occupiedAuthorityChallengeFixture();
+  const collision = AuthorityChallengeEventSchema.parse({
+    ...event,
+    expiresAt: new Date(Date.parse(event.expiresAt) + 1).toISOString(),
+  });
+  const writesBefore = harness.writeOrder.length;
+  await assertRejects(
+    () => persistAuthorityChallenge(harness.context, collision, expected),
+    Error,
+    "event collision",
+  );
+  assertEquals(harness.writeOrder.length, writesBefore);
+});
+
+Deno.test("mint_authority_challenge: same gate with distinct policies requires exact transition", async () => {
+  const definition = boundDefinition();
+  const review = (definition.stages as Record<string, unknown>[])[1];
+  const transitions = review.transitions as Record<string, unknown>[];
+  const alternate = structuredClone(transitions[0]);
+  alternate.name = "approve-alternate";
+  const human = (alternate.gates as Record<string, unknown>[])[2];
+  (human.config as Record<string, unknown>).minApprovals = 2;
+  transitions.push(alternate);
+  const harness = buildHarness(definition);
+  await reachBoundReview(harness);
+
+  await assertRejects(
+    () =>
+      model.methods.mint_authority_challenge.execute(
+        { workItem: WI, gateId: "plan-approval" },
+        harness.context,
+      ),
+    Error,
+    "pass transition=<name>",
+  );
+  await model.methods.mint_authority_challenge.execute(
+    {
+      workItem: WI,
+      gateId: "plan-approval",
+      transition: "approve-alternate",
+    },
+    harness.context,
+  );
+  const challenge = AuthorityChallengeEventSchema.parse(
+    latestNamed(harness, "authority-challenge-"),
+  );
+  assertEquals(challenge.identity.transition, "approve-alternate");
+  assertEquals(challenge.policy.minApprovals, 2);
+});
+
+Deno.test("legacy approve remains caller-attributed and challenge text has no authority", async () => {
+  const harness = buildHarness(boundDefinition());
+  await reachBoundReview(harness);
+  await model.methods.approve.execute({
+    workItem: WI,
+    gateId: "plan-approval",
+    actor: "caller-supplied-human",
+    note: "authority-challenge-deadbeef principal=admin channel=trusted",
+  }, harness.context);
+  const approval = approvalRecord(harness);
+  assertEquals(approval.actor, "caller-supplied-human");
+  assertStringIncludes(String(approval.note), "authority-challenge-deadbeef");
+  assertEquals("principal" in approval, false);
+  assertEquals("receipt" in approval, false);
+});
 
 function approvalRecord(harness: Harness): Record<string, unknown> {
   return latest(harness, "approval-TEST-1-plan-approval");

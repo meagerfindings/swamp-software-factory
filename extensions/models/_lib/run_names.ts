@@ -51,6 +51,7 @@ export const EVIDENCE_PREFIX = "evidence-";
 export const APPROVAL_PREFIX = "approval-";
 export const VALIDATION_PREFIX = "validation-";
 export const STATUS_PREFIX = "status-";
+export const AUTHORITY_CHALLENGE_PREFIX = "authority-challenge-";
 
 /**
  * Reserved slug for the factory-wide status overview (the `status` method
@@ -134,4 +135,13 @@ export function validationInstance(slug: string, target: string): string {
 
 export function statusInstance(slug: string): string {
   return `${STATUS_PREFIX}${slug}`;
+}
+
+export function authorityChallengeInstance(digest: string): string {
+  if (!/^[0-9a-f]{64}$/.test(digest)) {
+    throw new Error(
+      "authority challenge digest must be 64 lowercase hex characters",
+    );
+  }
+  return `${AUTHORITY_CHALLENGE_PREFIX}${digest}`;
 }

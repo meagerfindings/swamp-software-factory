@@ -101,6 +101,11 @@ import {
   resolveSubjectSpec,
   sha256Hex,
 } from "./_lib/approval_subject.ts";
+import {
+  AuthorityChallengeEventSchema,
+  mintAuthorityChallengeEvent,
+  validateAuthorityChallengeEvent,
+} from "./_lib/authority_challenge.ts";
 import type { BindingEnvironmentLike } from "./_lib/bindings.ts";
 import { prepareBindingEnvironment, resolveBindings } from "./_lib/bindings.ts";
 import { renderMermaid, renderTables } from "./_lib/mermaid.ts";
@@ -397,6 +402,88 @@ function definitionIdentity(
   const definition = context.definition;
   if (definition === undefined) return undefined;
   return { name: definition.name, version: definition.version };
+}
+
+type ChallengeExpected = Parameters<
+  typeof validateAuthorityChallengeEvent
+>[1];
+
+export async function persistAuthorityChallenge(
+  context: Ctx,
+  event: z.infer<typeof AuthorityChallengeEventSchema>,
+  expected: ChallengeExpected,
+): Promise<{ name: string; version?: number }> {
+  const repository = context.dataRepository;
+  if (repository.listVersions === undefined) {
+    throw new Error(
+      "Cannot persist authority challenge without exact version inspection",
+    );
+  }
+  const [discovered, versions, latestBytes, versionOneBytes] = await Promise
+    .all([
+      repository.findAllForModel(
+        context.modelType,
+        context.modelId,
+      ),
+      repository.listVersions(
+        context.modelType,
+        context.modelId,
+        event.instanceName,
+      ),
+      repository.getContent(
+        context.modelType,
+        context.modelId,
+        event.instanceName,
+      ),
+      repository.getContent(
+        context.modelType,
+        context.modelId,
+        event.instanceName,
+        1,
+      ),
+    ]);
+  const placements = discovered.filter((entry) =>
+    entry.name === event.instanceName
+  );
+  const occupied = placements.length > 0 || versions.length > 0 ||
+    latestBytes !== null || versionOneBytes !== null;
+  if (!occupied) {
+    return await context.writeResource(
+      "authority_challenge",
+      event.instanceName,
+      event,
+    );
+  }
+  if (
+    placements.length !== 1 || placements[0].version !== 1 ||
+    versions.length !== 1 || versions[0] !== 1 ||
+    latestBytes === null || versionOneBytes === null ||
+    canonicalJson(JSON.parse(new TextDecoder().decode(latestBytes))) !==
+      canonicalJson(JSON.parse(new TextDecoder().decode(versionOneBytes)))
+  ) {
+    throw new Error(
+      `Authority challenge occupied state is not exact version 1 at '${event.instanceName}'`,
+    );
+  }
+  let prior: z.infer<typeof AuthorityChallengeEventSchema>;
+  try {
+    prior = await validateAuthorityChallengeEvent(
+      JSON.parse(new TextDecoder().decode(versionOneBytes)),
+      expected,
+    );
+  } catch (error) {
+    throw new Error(
+      `Authority challenge occupied state is invalid at '${event.instanceName}': ${
+        String(error)
+      }`,
+    );
+  }
+  if (canonicalJson(prior) !== canonicalJson(event)) {
+    throw new Error(
+      `Authority challenge event collision at '${event.instanceName}'`,
+    );
+  }
+  return { name: event.instanceName, version: 1 };
 }
 
 function gateContextFrom(
@@ -1478,6 +1565,7 @@ const MUTATING_METHODS = [
   "record_artifact",
   "record_evidence",
   "resolve_findings",
+  "mint_authority_challenge",
   "approve",
   "reject",
   "advance",
@@ -1540,6 +1628,15 @@ export const model = {
       schema: ApprovalRecordSchema,
       lifetime: "infinite" as const,
       garbageCollection: 50,
+    },
+    "authority_challenge": {
+      description:
+        "Engine-minted immutable non-authorizing challenge events (instances: authority-challenge-<event-digest>)",
+      schema: AuthorityChallengeEventSchema,
+      lifetime: "infinite" as const,
+      // Every event has its own content-addressed instance. A second version is
+      // only an identical retry, never additional history.
+      garbageCollection: 1,
     },
     "validation": {
       description:
@@ -2439,6 +2536,141 @@ export const model = {
           },
         );
         return { dataHandles: handles };
+      },
+    },
+
+    mint_authority_challenge: {
+      description:
+        "Mint an immutable, engine-bound, NON-AUTHORIZING challenge for the current exact approval subject. This is a prerequisite record only; it cannot approve a gate or authorize work.",
+      arguments: z.strictObject({
+        workItem: WorkItemArg,
+        gateId: z.string(),
+        transition: TransitionArg,
+      }),
+      execute: async (
+        methodArgs: { workItem: string; gateId: string; transition?: string },
+        context: Ctx,
+      ) => {
+        const { args } = await loadFactoryArgs(context);
+        const slug = workItemSlug(methodArgs.workItem);
+        const view = await viewFor(context, slug, methodArgs.workItem);
+        const state = requireState(view, methodArgs.workItem);
+        requireActive(state);
+        const definition = definitionIdentity(context);
+        if (definition === undefined) {
+          throw new Error(
+            "Cannot mint authority challenge without exact definition identity",
+          );
+        }
+        let challengeGates = approvalGatesInScope(
+          args,
+          state.stageId,
+          methodArgs.gateId,
+        );
+        if (methodArgs.transition !== undefined) {
+          challengeGates = challengeGates.filter((entry) =>
+            entry.transition.name === methodArgs.transition
+          );
+        }
+        if (challengeGates.length === 0) {
+          throw new Error(
+            `No human-approval '${methodArgs.gateId}' challenge policy is available` +
+              (methodArgs.transition === undefined
+                ? ""
+                : ` for transition '${methodArgs.transition}'`),
+          );
+        }
+        const challengePolicies = await Promise.all(challengeGates.map(
+          async (entry) => ({
+            transition: entry.transition.name,
+            minApprovals: entry.gate.config.minApprovals ?? 1,
+            contract: await computeApprovalSubjectContract({
+              gateId: methodArgs.gateId,
+              transition: entry.transition.name,
+              subject: entry.gate.config.subject ?? {},
+            }),
+          }),
+        ));
+        const firstPolicy = challengePolicies[0];
+        if (
+          challengePolicies.some((policy) =>
+            policy.transition !== firstPolicy.transition ||
+            policy.minApprovals !== firstPolicy.minApprovals ||
+            policy.contract.version !== firstPolicy.contract.version ||
+            policy.contract.digest !== firstPolicy.contract.digest
+          )
+        ) {
+          throw new Error(
+            `Human-approval '${methodArgs.gateId}' has multiple challenge policies from stage ` +
+              `'${state.stageId}'; pass transition=<name> to select the exact policy.`,
+          );
+        }
+        const subject = await subjectForDecision(
+          context,
+          args,
+          state,
+          view,
+          methodArgs.workItem,
+          { ...methodArgs, transition: firstPolicy.transition },
+        );
+        if (subject === undefined) {
+          throw new Error(
+            `Cannot mint authority challenge for unbound or unavailable human-approval '${methodArgs.gateId}'`,
+          );
+        }
+        const minApprovals = firstPolicy.minApprovals;
+        const contract = await computeApprovalSubjectContract({
+          gateId: methodArgs.gateId,
+          transition: subject.transition,
+          subject: subject.spec,
+        });
+        const event = await mintAuthorityChallengeEvent({
+          identity: {
+            modelType: "@swamp/software-factory",
+            modelId: context.modelId,
+            modelInstanceName: definition.name,
+            definitionName: definition.name,
+            definitionVersion: definition.version,
+            definitionHash: await definitionHash(args),
+            workItem: methodArgs.workItem,
+            stageId: state.stageId,
+            cycle: currentCycle(state),
+            runEra: state.startedAt,
+            gateId: methodArgs.gateId,
+            transition: subject.transition,
+          },
+          subject,
+          policy: {
+            type: "human-approval",
+            minApprovals,
+            subjectContractVersion: contract.version,
+            subjectContractDigest: contract.digest,
+          },
+        });
+        const expected: ChallengeExpected = {
+          resourceName: event.instanceName,
+          modelType: "@swamp/software-factory",
+          modelId: context.modelId,
+          modelInstanceName: definition.name,
+          definitionName: definition.name,
+          definitionVersion: definition.version,
+          definitionHash: await definitionHash(args),
+          workItem: methodArgs.workItem,
+          stageId: state.stageId,
+          cycle: currentCycle(state),
+          runEra: state.startedAt,
+          gateId: methodArgs.gateId,
+          transition: subject.transition,
+          subject: subject.spec,
+          minApprovals,
+        };
+        await validateAuthorityChallengeEvent(event, expected);
+        const handle = await persistAuthorityChallenge(
+          context,
+          event,
+          expected,
+        );
+        return { dataHandles: [handle] };
       },
     },
 

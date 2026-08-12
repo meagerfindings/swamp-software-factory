@@ -1,6 +1,6 @@
 manifestVersion: 1
 name: "@mgreten/software-factory"
-version: "2026.08.10.2"
+version: "2026.08.12.1"
 description: |
   A fully generic, model-driven state machine for guiding agents through a
   software development lifecycle. The entire machine — stages, transitions,
@@ -42,6 +42,10 @@ description: |
     products and external facts (every artifact and evidence carries a declared
     schema, validated on record; strict objects by default)
   - `resolve_findings` — resolution notes on kind: findings artifacts
+  - `mint_authority_challenge` — mint an immutable engine-bound challenge for
+    the current exact approval subject. This first legacy-subject increment is
+    explicitly non-authorizing: it cannot approve, dispatch, or advance and
+    does not claim trusted human approval.
   - `approve` / `reject` — human gate decisions, cycle-scoped; gates may bind
     decisions to exact artifact/evidence versions and canonical payload digests
   - `advance` — move along a gated transition
@@ -67,6 +71,8 @@ description: |
   All resources are versioned, immutable, and namespaced per work item:
   `state-<workItem>`, `artifact-<workItem>-<name>`,
   `evidence-<workItem>-<name>`, `approval-<workItem>-<gateId>`,
+  `authority-challenge-<eventDigest>` (content-addressed, non-authorizing
+  prerequisite events),
   `validation-<workItem>-<target>` (recorded payload-validation failures,
   bindable as retry feedback), an append-only `journal-<workItem>`, and a
   `status-<workItem>` materialized view (refreshed on every `status` call;

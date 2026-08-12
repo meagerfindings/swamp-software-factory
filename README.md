@@ -109,6 +109,7 @@ on PAY-218 with the feature factory" is enough.
 | `record_artifact`    | Record a declared artifact; payload validated against its schema.                                                                                                                         |
 | `record_evidence`    | Record a declared external fact; payload validated against its schema (or the built-in outcome schema for `resultEvidence`).                                                              |
 | `resolve_findings`   | Resolution notes on `kind: findings` artifacts (not a fresh recording).                                                                                                                   |
+| `mint_authority_challenge` | Mint an immutable engine-bound challenge for the current exact approval subject. The first increment is explicitly legacy-subject and **non-authorizing**: it is only a prerequisite record and never approves, dispatches, or advances. |
 | `approve` / `reject` | Human gate decisions, cycle-scoped. Subject-bound gates record an `approval-subject-v1` manifest and SHA-256 digest computed from trusted run data. Also grants `cycle-override:<stage>`. |
 | `advance`            | Move along a named transition. Gates run in pre-flight checks and re-validate in the method body.                                                                                         |
 | `summary`            | The full implementation history of a work item — every stage visit, artifact version, finding, approval, and transition — rendered as markdown, statically from the run data (read-only). |
@@ -121,7 +122,8 @@ on PAY-218 with the feature factory" is enough.
 All resources are versioned, immutable, and namespaced per work item:
 `state-<workItem>`, `artifact-<workItem>-<name>`, `evidence-<workItem>-<name>`,
 `approval-<workItem>-<gateId>`, `validation-<workItem>-<target>` (recorded
-payload-validation failures, bindable as retry feedback), and the append-only
+payload-validation failures, bindable as retry feedback), content-addressed
+`authority-challenge-<eventDigest>` non-authorizing prerequisite events, and the append-only
 `journal-<workItem>` audit trail. (Work item refs that aren't name-safe — URLs,
 say — get a deterministic hashed slug; envelopes always carry the original.)
 Inspect with:
