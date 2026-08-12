@@ -864,7 +864,13 @@ async function buildStatus(
     const celContext = prepareBindingEnvironment(
       env,
       context.definition?.name ?? "",
-      { workItem },
+      {
+        workItem,
+        // Immutable engine context for this resolution only. `state` is the
+        // authoritative persisted run position; do not merge authored values.
+        stage: state.stageId,
+        cycle,
+      },
       view,
     );
     const resolved = resolveBindings(

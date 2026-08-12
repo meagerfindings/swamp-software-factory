@@ -91,7 +91,10 @@ export function prepareBindingEnvironment(
   }
   return {
     data: receiver,
-    self: { name: selfName, ...selfExtras },
+    // `name` is engine-owned. Keep it authoritative even if a caller passes a
+    // colliding extra; stage binding callers likewise supply only trusted run
+    // state as extras, never authored input or global-argument objects.
+    self: { ...selfExtras, name: selfName },
   };
 }
 

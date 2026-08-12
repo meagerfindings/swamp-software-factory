@@ -97,7 +97,10 @@ on PAY-218 with the feature factory" is enough.
   limit park the run for an explicit human `cycle-override` approval.
 - **Bindings** — stage config references run data in platform CEL syntax:
   `${{ data.latest(self.name, "evidence-change-request").payload.headSha }}`,
-  resolved by the engine at stage execution time.
+  resolved by the engine at stage execution time. During stage work resolution,
+  engine-owned `self.workItem`, `self.stage`, and integer `self.cycle` identify
+  the current work item and authoritative stage entry. These fields are absent
+  from binding contexts where that run position is unavailable.
 
 ## Methods
 

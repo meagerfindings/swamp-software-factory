@@ -95,6 +95,23 @@ Deno.test("prepareBindingEnvironment: platform-identical data.latest syntax", ()
     env.evaluate("self.workItem", context),
     "PAY-218",
   );
+  assertEquals(context.self, { name: "run-1", workItem: "PAY-218" });
+});
+
+Deno.test("prepareBindingEnvironment: engine name cannot be overridden by extras", () => {
+  const env = new Environment({ unlistedVariablesAreDyn: true });
+  const context = prepareBindingEnvironment(
+    env,
+    "authoritative-name",
+    { name: "authored-name", stage: "review", cycle: 2 },
+    viewWith(),
+  );
+  assertEquals(context.self, {
+    name: "authoritative-name",
+    stage: "review",
+    cycle: 2,
+  });
+  assertEquals(env.evaluate("self.cycle", context), 2);
 });
 
 Deno.test("resolveBindings: whole-string expressions return raw values", () => {

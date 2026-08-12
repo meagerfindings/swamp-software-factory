@@ -3576,6 +3576,89 @@ Deno.test("status: self-describing packet with gates, manifest, and bindings", a
   assertEquals(cycles.planning, { entries: 1, limit: 5 });
 });
 
+Deno.test("stage work bindings expose authoritative stage entry context in isolation", async () => {
+  const work = (label: string) => ({
+    mode: "method",
+    method: {
+      modelIdOrName: "worker",
+      methodName: "run",
+      inputs: {
+        label,
+        workItem: "${{ self.workItem }}",
+        stage: "${{ self.stage }}",
+        cycle: "${{ self.cycle }}",
+        // An authored input named `self` is ordinary payload and cannot alter
+        // the separately constructed CEL environment's engine-owned fields.
+        self: { stage: "forged", cycle: 999, name: "forged" },
+        engineName: "${{ self.name }}",
+      },
+    },
+  });
+  const harness = buildHarness({
+    stages: [
+      {
+        id: "alpha",
+        initial: true,
+        work: work("alpha-work"),
+        transitions: [{ name: "next", to: "beta" }],
+      },
+      {
+        id: "beta",
+        work: work("beta-work"),
+        transitions: [
+          { name: "retry", to: "alpha" },
+          { name: "finish", to: "done" },
+        ],
+      },
+      { id: "done", terminal: true },
+    ],
+  });
+
+  const resolvedInputs = async (workItem: string) => {
+    await model.methods.status.execute({ workItem }, harness.context);
+    const status = statusJson(harness);
+    return ((status.work as Record<string, unknown>).method as {
+      inputs: Record<string, unknown>;
+    }).inputs;
+  };
+
+  await startRun(harness, "ITEM-A");
+  await startRun(harness, "ITEM-B");
+  assertEquals(await resolvedInputs("ITEM-A"), {
+    label: "alpha-work",
+    workItem: "ITEM-A",
+    stage: "alpha",
+    cycle: 1,
+    self: { stage: "forged", cycle: 999, name: "forged" },
+    engineName: "test-factory",
+  });
+
+  await advance(harness, "next", "ITEM-A");
+  assertEquals(
+    await resolvedInputs("ITEM-A").then((inputs) => ({
+      workItem: inputs.workItem,
+      stage: inputs.stage,
+      cycle: inputs.cycle,
+    })),
+    { workItem: "ITEM-A", stage: "beta", cycle: 1 },
+  );
+  // The other run remains on its own first entry.
+  assertEquals(
+    await resolvedInputs("ITEM-B").then((inputs) => ({
+      workItem: inputs.workItem,
+      stage: inputs.stage,
+      cycle: inputs.cycle,
+    })),
+    { workItem: "ITEM-B", stage: "alpha", cycle: 1 },
+  );
+
+  await advance(harness, "retry", "ITEM-A");
+  const reentry = await resolvedInputs("ITEM-A");
+  assertEquals(reentry.stage, "alpha");
+  assertEquals(reentry.cycle, 2);
+  assertEquals(typeof reentry.cycle, "number");
+});
+
 Deno.test("validate: passes good definitions, throws on errors", async () => {
   const harness = buildHarness();
   await model.methods.validate.execute({}, harness.context);

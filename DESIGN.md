@@ -237,7 +237,11 @@ a different definition.
 `${{ }}` syntax — including run-data bindings, which use the platform's own data
 namespace: `data.latest(self.name, "evidence-<name>")`, `data.version(...)`,
 `data.query(...)`. `self.name` keeps bindings generic across instances (so they
-work in CEL-shared template stages). What the engine controls is _when_ they
+work in CEL-shared template stages). At stage work resolution only, `self` also
+contains engine-owned `workItem`, `stage` (the current stage ID), and `cycle`
+(the positive integer entry count for that stage). They are built from the
+persisted run state and authored globals or inputs cannot override them; no
+other run state is exposed. What the engine controls is _when_ they
 evaluate: bindings only ever reference data **written by earlier stages**, and
 the engine evaluates them at stage execution time — by which point that data
 exists — using the platform's own evaluator (`context.createCelEnvironment()`).
