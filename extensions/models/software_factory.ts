@@ -63,6 +63,7 @@ import {
   ApprovalRecordSchema,
   ArtifactEnvelopeSchema,
   artifactInstance,
+  AttemptLeaseSchema,
   currentCycle,
   dispatchAttempts,
   entriesInto,
@@ -258,13 +259,42 @@ async function viewFor(
   slug: string,
   workItem: string,
 ): Promise<RunView> {
-  return await loadRunView(
+  const current = await loadRunView(
     context.dataRepository,
     context.modelType,
     context.modelId,
     slug,
     workItem,
   );
+  // The package was renamed from the upstream @swamp collective to the
+  // user-owned @mgreten collective. Read legacy run data when a caller is
+  // operating on an existing run, then write new versions under the current
+  // type. Current records win by name, so an explicit migration can gradually
+  // adopt the run without losing old artifacts, evidence, or approvals.
+  if (context.modelType !== "@mgreten/software-factory") return current;
+  const legacy = await loadRunView(
+    context.dataRepository,
+    "@swamp/software-factory",
+    context.modelId,
+    slug,
+    workItem,
+  );
+  if (legacy.state === null) return current;
+  return {
+    state: current.state ?? legacy.state,
+    artifacts: new Map([...legacy.artifacts, ...current.artifacts]),
+    evidence: new Map([...legacy.evidence, ...current.evidence]),
+    validations: new Map([...legacy.validations, ...current.validations]),
+    approvals: new Map([...legacy.approvals, ...current.approvals]),
+    approvalHistory: new Map([
+      ...legacy.approvalHistory,
+      ...current.approvalHistory,
+    ]),
+    approvalHistoryIssues: new Map([
+      ...legacy.approvalHistoryIssues,
+      ...current.approvalHistoryIssues,
+    ]),
+  };
 }
 
 function requireState(view: RunView, workItem: string): RunState {
@@ -1599,10 +1629,28 @@ async function checkState(
  * work item's isolated run state.
  */
 export const model = {
-  type: "@swamp/software-factory",
-  version: "2026.06.24.1",
+  type: "@mgreten/software-factory",
+  version: "2026.08.18.2",
+  upgrades: [
+    {
+      toVersion: "2026.08.12.2",
+      description: "Align the model version with the package release",
+      upgradeAttributes: (old: Record<string, unknown>) => old,
+    },
+    {
+      toVersion: "2026.08.18.1",
+      description: "Add generic workflow attempt lease lifecycle primitives",
+      upgradeAttributes: (old: Record<string, unknown>) => old,
+    },
+    {
+      toVersion: "2026.08.18.2",
+      description:
+        "Read runs created under the former @swamp package namespace",
+      upgradeAttributes: (old: Record<string, unknown>) => old,
+    },
+  ],
   globalArguments: PlatformArgumentsSchema,
-  reports: ["@swamp/software-factory/work-item-summary"],
+  reports: ["@mgreten/software-factory/work-item-summary"],
 
   resources: {
     "state": {
@@ -1669,6 +1717,12 @@ export const model = {
       lifetime: "infinite" as const,
       // A read-time cache, not history — keep only the last few refreshes.
       garbageCollection: 3,
+    },
+    "attempt_lease": {
+      description: "Provider-neutral workflow attempt lease and outcome",
+      schema: AttemptLeaseSchema,
+      lifetime: "infinite" as const,
+      garbageCollection: 50,
     },
   },
 
@@ -1905,6 +1959,170 @@ export const model = {
   },
 
   methods: {
+    begin_attempt: {
+      description: "Acquire a provider-neutral lease for a workflow attempt.",
+      arguments: z.object({
+        workItem: WorkItemArg,
+        attemptId: z.string().min(1),
+        owner: z.string().min(1),
+        leaseSeconds: z.number().int().positive().max(86400).default(900),
+      }),
+      execute: async (
+        a: {
+          workItem: string;
+          attemptId: string;
+          owner: string;
+          leaseSeconds: number;
+        },
+        context: Ctx,
+      ) => {
+        const view = await viewFor(
+          context,
+          workItemSlug(a.workItem),
+          a.workItem,
+        );
+        const state = requireState(view, a.workItem);
+        requireActive(state);
+        const name = `attempt-${workItemSlug(a.workItem)}-${a.attemptId}`;
+        const prior = await context.dataRepository.getContent(
+          context.modelType,
+          context.modelId,
+          name,
+        );
+        if (prior !== null) return { dataHandles: [{ name }] };
+        const now = Date.now();
+        const iso = new Date(now).toISOString();
+        return {
+          dataHandles: [
+            await context.writeResource("attempt_lease", name, {
+              workItem: a.workItem,
+              attemptId: a.attemptId,
+              stageId: state.stageId,
+              status: "leased",
+              owner: a.owner,
+              leasedAt: iso,
+              heartbeatAt: iso,
+              expiresAt: new Date(now + a.leaseSeconds * 1000).toISOString(),
+            }),
+          ],
+        };
+      },
+    },
+    heartbeat_attempt: {
+      description: "Renew an active workflow attempt lease.",
+      arguments: z.object({
+        workItem: WorkItemArg,
+        attemptId: z.string().min(1),
+        leaseSeconds: z.number().int().positive().max(86400).default(900),
+      }),
+      execute: async (
+        a: { workItem: string; attemptId: string; leaseSeconds: number },
+        context: Ctx,
+      ) => {
+        const name = `attempt-${workItemSlug(a.workItem)}-${a.attemptId}`;
+        const raw = await context.dataRepository.getContent(
+          context.modelType,
+          context.modelId,
+          name,
+        );
+        if (raw === null) throw new Error(`Unknown attempt '${a.attemptId}'.`);
+        const lease = AttemptLeaseSchema.parse(
+          JSON.parse(new TextDecoder().decode(raw)),
+        );
+        if (lease.status !== "leased") return { dataHandles: [{ name }] };
+        const now = Date.now();
+        return {
+          dataHandles: [
+            await context.writeResource("attempt_lease", name, {
+              ...lease,
+              heartbeatAt: new Date(now).toISOString(),
+              expiresAt: new Date(now + a.leaseSeconds * 1000).toISOString(),
+            }),
+          ],
+        };
+      },
+    },
+    complete_attempt: {
+      description:
+        "Complete an attempt with a bounded retry, fail, or stop decision.",
+      arguments: z.object({
+        workItem: WorkItemArg,
+        attemptId: z.string().min(1),
+        decision: z.enum(["retry", "fail", "stop"]),
+        reason: z.string().min(1),
+        result: z.record(z.string(), z.unknown()).optional(),
+      }),
+      execute: async (
+        a: {
+          workItem: string;
+          attemptId: string;
+          decision: "retry" | "fail" | "stop";
+          reason: string;
+          result?: Record<string, unknown>;
+        },
+        context: Ctx,
+      ) => {
+        const name = `attempt-${workItemSlug(a.workItem)}-${a.attemptId}`;
+        const raw = await context.dataRepository.getContent(
+          context.modelType,
+          context.modelId,
+          name,
+        );
+        if (raw === null) throw new Error(`Unknown attempt '${a.attemptId}'.`);
+        const lease = AttemptLeaseSchema.parse(
+          JSON.parse(new TextDecoder().decode(raw)),
+        );
+        if (lease.status === "completed") return { dataHandles: [{ name }] };
+        return {
+          dataHandles: [
+            await context.writeResource("attempt_lease", name, {
+              ...lease,
+              status: "completed",
+              completedAt: new Date().toISOString(),
+              decision: a.decision,
+              reason: a.reason,
+              result: a.result,
+            }),
+          ],
+        };
+      },
+    },
+    claim_orphan_attempt: {
+      description: "Mark an expired attempt lease orphaned, idempotently.",
+      arguments: z.object({
+        workItem: WorkItemArg,
+        attemptId: z.string().min(1),
+        owner: z.string().min(1),
+      }),
+      execute: async (
+        a: { workItem: string; attemptId: string; owner: string },
+        context: Ctx,
+      ) => {
+        const name = `attempt-${workItemSlug(a.workItem)}-${a.attemptId}`;
+        const raw = await context.dataRepository.getContent(
+          context.modelType,
+          context.modelId,
+          name,
+        );
+        if (raw === null) throw new Error(`Unknown attempt '${a.attemptId}'.`);
+        const lease = AttemptLeaseSchema.parse(
+          JSON.parse(new TextDecoder().decode(raw)),
+        );
+        if (
+          lease.status !== "leased" || Date.parse(lease.expiresAt) > Date.now()
+        ) return { dataHandles: [{ name }] };
+        return {
+          dataHandles: [
+            await context.writeResource("attempt_lease", name, {
+              ...lease,
+              status: "orphaned",
+              owner: a.owner,
+              reason: "lease-expired",
+            }),
+          ],
+        };
+      },
+    },
     start: {
       description:
         "Validate the definition and start a run for a work item at the initial stage. Fails if that work item already has a run (resume with 'status').",
@@ -2031,6 +2249,152 @@ export const model = {
           workItem,
           stage: initial.id,
         });
+        return { dataHandles: handles };
+      },
+    },
+
+    migrate: {
+      description:
+        "Adopt the current validated factory definition for an existing run without discarding its state, artifacts, or approvals. Refuses incompatible stage graphs instead of silently rewriting the run.",
+      arguments: z.object({
+        workItem: WorkItemArg,
+        expectedDefinitionHash: z.string().optional().describe(
+          "Optional previous definition hash; when supplied it must match the persisted run hash",
+        ),
+      }),
+      execute: async (
+        methodArgs: { workItem: string; expectedDefinitionHash?: string },
+        context: Ctx,
+      ) => {
+        const { args } = await loadFactoryArgs(context);
+        const { errors } = validateGraph(args);
+        if (errors.length > 0) {
+          throw new Error("Definition is invalid:\n  " + errors.join("\n  "));
+        }
+        const workItem = methodArgs.workItem;
+        const slug = workItemSlug(workItem);
+        const view = await viewFor(context, slug, workItem);
+        const state = requireState(view, workItem);
+        const currentStage = findStage(args, state.stageId);
+        if (currentStage === undefined) {
+          throw new Error(
+            `Cannot migrate '${workItem}': persisted stage '${state.stageId}' is not present in the current definition. Restore that stage or use an explicit recovery plan; state was not changed.`,
+          );
+        }
+        const historicalStages = Object.keys(state.cycles);
+        const missingHistoricalStages = historicalStages.filter((stageId) =>
+          findStage(args, stageId) === undefined
+        );
+        if (missingHistoricalStages.length > 0) {
+          throw new Error(
+            `Cannot migrate '${workItem}': the current definition removed historical stage(s) ${
+              missingHistoricalStages.join(", ")
+            }. Restore those stages or use an explicit recovery plan; state was not changed.`,
+          );
+        }
+        if (
+          methodArgs.expectedDefinitionHash !== undefined &&
+          state.definitionHash !== methodArgs.expectedDefinitionHash
+        ) {
+          throw new Error(
+            `Definition hash precondition failed: run has ${
+              state.definitionHash ?? "none"
+            }, expected ${methodArgs.expectedDefinitionHash}.`,
+          );
+        }
+        const newHash = await definitionHash(args);
+        if (state.definitionHash === newHash) {
+          return { dataHandles: [] };
+        }
+        const oldHash = state.definitionHash;
+        state.definitionHash = newHash;
+        state.definitionVersion = context.definition?.version ??
+          state.definitionVersion;
+        const handles = [
+          await context.writeResource(
+            "state",
+            stateInstance(slug),
+            state as unknown as Record<string, unknown>,
+          ),
+          await writeJournal(context, workItem, slug, {
+            event: "definition-migrated",
+            stageId: state.stageId,
+            summary: `Migrated '${workItem}' from definition ${
+              oldHash ?? "none"
+            } to ${newHash}`,
+            payload: {
+              oldHash,
+              newHash,
+              definitionVersion: context.definition?.version,
+              stageId: state.stageId,
+              cycle: state.cycles[state.stageId],
+            },
+          }),
+        ];
+        return { dataHandles: handles };
+      },
+    },
+
+    resume: {
+      description:
+        "Resume a terminal blocked run at an explicitly named non-terminal stage without destroying its durable history. Intended for degraded recovery after a factory or environment fix.",
+      arguments: z.object({
+        workItem: WorkItemArg,
+        targetStage: z.string().min(1),
+        reason: z.string().min(1),
+      }),
+      execute: async (
+        methodArgs: { workItem: string; targetStage: string; reason: string },
+        context: Ctx,
+      ) => {
+        const { args } = await loadFactoryArgs(context);
+        const { errors } = validateGraph(args);
+        if (errors.length > 0) {
+          throw new Error("Definition is invalid:\n  " + errors.join("\n  "));
+        }
+        const workItem = methodArgs.workItem;
+        const slug = workItemSlug(workItem);
+        const view = await viewFor(context, slug, workItem);
+        const state = requireState(view, workItem);
+        if (state.status !== "terminal") {
+          throw new Error(
+            `Run for '${workItem}' is active at '${state.stageId}'; use status/advance rather than resume.`,
+          );
+        }
+        const target = findStage(args, methodArgs.targetStage);
+        if (target === undefined || target.terminal === true) {
+          throw new Error(
+            `Resume target '${methodArgs.targetStage}' is not a non-terminal stage; state was not changed.`,
+          );
+        }
+        const now = new Date().toISOString();
+        state.stageId = target.id;
+        state.status = "active";
+        state.enteredAt = now;
+        state.cycles[target.id] = (state.cycles[target.id] ?? 0) + 1;
+        state.definitionHash = await definitionHash(args);
+        state.definitionVersion = context.definition?.version ??
+          state.definitionVersion;
+        const handles = [
+          await context.writeResource(
+            "state",
+            stateInstance(slug),
+            state as unknown as Record<string, unknown>,
+          ),
+          await writeJournal(context, workItem, slug, {
+            event: "resumed",
+            stageId: target.id,
+            summary:
+              `Resumed '${workItem}' from terminal stage '${view.state?.stageId}' at '${target.id}'`,
+            payload: {
+              previousStage: view.state?.stageId,
+              targetStage: target.id,
+              reason: methodArgs.reason,
+              definitionVersion: state.definitionVersion,
+              definitionHash: state.definitionHash,
+            },
+          }),
+        ];
         return { dataHandles: handles };
       },
     },
@@ -2632,7 +2996,7 @@ export const model = {
         });
         const event = await mintAuthorityChallengeEvent({
           identity: {
-            modelType: "@swamp/software-factory",
+            modelType: "@mgreten/software-factory",
             modelId: context.modelId,
             modelInstanceName: definition.name,
             definitionName: definition.name,
@@ -2655,7 +3019,7 @@ export const model = {
         });
         const expected: ChallengeExpected = {
           resourceName: event.instanceName,
-          modelType: "@swamp/software-factory",
+          modelType: "@mgreten/software-factory",
           modelId: context.modelId,
           modelInstanceName: definition.name,
           definitionName: definition.name,

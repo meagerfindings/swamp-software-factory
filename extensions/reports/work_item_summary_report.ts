@@ -65,13 +65,13 @@ interface ReportContext {
   };
 }
 
-const FACTORY_TYPE = "@swamp/software-factory";
+const FACTORY_TYPE = "@mgreten/software-factory";
 
 /**
  * Renders the recorded history for successful or failed factory summary calls.
  */
 export const report = {
-  name: "@swamp/software-factory/work-item-summary",
+  name: "@mgreten/software-factory/work-item-summary",
   description:
     "Linear implementation history of a factory work item, rendered statically from its recorded run data",
   scope: "method",

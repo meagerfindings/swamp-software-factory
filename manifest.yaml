@@ -1,6 +1,6 @@
 manifestVersion: 1
 name: "@mgreten/software-factory"
-version: "2026.08.12.1"
+version: "2026.08.18.2"
 description: |
   A fully generic, model-driven state machine for guiding agents through a
   software development lifecycle. The entire machine — stages, transitions,
@@ -33,6 +33,10 @@ description: |
 
   - `start` — validate the graph and start a work item at the initial stage
     (refuses to restart; resume with `status`)
+  - `migrate` — explicitly adopt a compatible definition change for an active
+    run without discarding its state, artifacts, or approvals
+  - `resume` — recover a terminal run at an explicitly named non-terminal
+    stage without destructive reset
   - `status` — the driver's entrypoint: what a work item requires right now,
     or a factory-wide overview of all runs
   - `record_dispatch` — record that a stage's work ran (before it runs); proves

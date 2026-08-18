@@ -107,6 +107,8 @@ on PAY-218 with the feature factory" is enough.
 | Method               | Purpose                                                                                                                                                                                   |
 | -------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `start`              | Validate the graph, start a work item at the initial stage. Refuses to restart — resume with `status`.                                                                                    |
+| `migrate`            | Adopt a compatible definition change for an existing run without discarding state, artifacts, or approvals. Refuses missing current stages and supports an optional definition-hash precondition. |
+| `resume`             | Recover a terminal run at an explicitly named non-terminal stage, preserving its history; requires a human-supplied reason.                                                                  |
 | `status`             | The driver's entrypoint: what a work item requires right now; without `workItem`, an overview of all runs (read-only).                                                                    |
 | `record_dispatch`    | Record that the current stage's work is running (before it runs); proves the stage executed and drives the runaway-loop guard.                                                            |
 | `record_artifact`    | Record a declared artifact; payload validated against its schema.                                                                                                                         |

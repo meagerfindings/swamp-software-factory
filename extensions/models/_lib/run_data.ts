@@ -200,6 +200,23 @@ export const StatusEnvelopeSchema = z.record(z.string(), z.unknown());
 
 export type StatusEnvelope = z.infer<typeof StatusEnvelopeSchema>;
 
+/** Durable, provider-neutral lease for one workflow attempt. */
+export const AttemptLeaseSchema = z.object({
+  workItem: z.string(),
+  attemptId: z.string().min(1),
+  stageId: z.string(),
+  status: z.enum(["leased", "completed", "orphaned"]),
+  owner: z.string().min(1),
+  leasedAt: z.string(),
+  heartbeatAt: z.string(),
+  expiresAt: z.string(),
+  completedAt: z.string().optional(),
+  result: z.record(z.string(), z.unknown()).optional(),
+  decision: z.enum(["retry", "fail", "stop"]).optional(),
+  reason: z.string().optional(),
+});
+export type AttemptLease = z.infer<typeof AttemptLeaseSchema>;
+
 // ---------------------------------------------------------------------------
 // Work-item slugs and instance naming live in run_names.ts (zod-free so
 // report extensions can bundle them); re-exported here for the engine.
