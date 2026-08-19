@@ -566,19 +566,46 @@ async function writeJournal(
   });
 }
 
+/** Definition-drift info detected by `noteDefinitionDrift`, folded into a
+ * call site's own mainline journal payload (field `definitionDrift`) rather
+ * than journaled separately — see that function's comment for why. */
+interface DefinitionDriftInfo {
+  oldHash: string;
+  newHash: string;
+  stageId: string;
+  cycle: number | undefined;
+  definitionVersion: number | undefined;
+}
+
 /**
  * Make definition edits visible without preventing active runs from using the
  * new definition. Legacy states adopt their first observed hash silently.
+ *
+ * IMPORTANT: this function does NOT write its own journal entry. Every
+ * method that calls it also performs its own mainline `writeJournal(...)`
+ * call later in the same execution, targeting the same instance name
+ * (`journal-<workItem>`, from `journalInstance(slug)`). Two `writeResource`
+ * calls against that same instance name within one method execution collide
+ * ("Duplicate data instance name") — this bit the factory in production
+ * (RIF-741). So drift detection only mutates `state` (a different instance,
+ * `state-<slug>`, which is safe to write here) and returns the drift info;
+ * the caller is responsible for folding it into its own single journal
+ * write's payload under a `definitionDrift` field, only when drift was
+ * detected (i.e. this returns non-undefined).
  */
 async function noteDefinitionDrift(
   context: Ctx,
   args: FactoryArguments,
   state: RunState,
-  workItem: string,
+  _workItem: string,
   slug: string,
-): Promise<{ name: string }[]> {
+): Promise<
+  { handles: { name: string }[]; drift: DefinitionDriftInfo | undefined }
+> {
   const newHash = await definitionHash(args);
-  if (state.definitionHash === newHash) return [];
+  if (state.definitionHash === newHash) {
+    return { handles: [], drift: undefined };
+  }
 
   const oldHash = state.definitionHash;
   state.definitionHash = newHash;
@@ -589,23 +616,16 @@ async function noteDefinitionDrift(
       state as unknown as Record<string, unknown>,
     ),
   ];
-  if (oldHash !== undefined) {
-    handles.push(
-      await writeJournal(context, workItem, slug, {
-        event: "definition-changed",
-        stageId: state.stageId,
-        summary: `Factory definition changed while '${workItem}' was active`,
-        payload: {
-          oldHash,
-          newHash,
-          stageId: state.stageId,
-          cycle: state.cycles[state.stageId],
-          definitionVersion: context.definition?.version,
-        },
-      }),
-    );
-  }
-  return handles;
+  const drift: DefinitionDriftInfo | undefined = oldHash === undefined
+    ? undefined
+    : {
+      oldHash,
+      newHash,
+      stageId: state.stageId,
+      cycle: state.cycles[state.stageId],
+      definitionVersion: context.definition?.version,
+    };
+  return { handles, drift };
 }
 
 /**
@@ -2430,7 +2450,7 @@ export const model = {
         const slug = workItemSlug(workItem);
         const view = await viewFor(context, slug, workItem);
         const state = requireState(view, workItem);
-        const handles = await noteDefinitionDrift(
+        const { handles, drift } = await noteDefinitionDrift(
           context,
           args,
           state,
@@ -2508,6 +2528,7 @@ export const model = {
               attempt,
               mode: methodArgs.mode,
               runId: methodArgs.runId,
+              ...(drift !== undefined ? { definitionDrift: drift } : {}),
             },
           }),
         );
@@ -2570,7 +2591,7 @@ export const model = {
         const slug = workItemSlug(workItem);
         const view = await viewFor(context, slug, workItem);
         const state = requireState(view, workItem);
-        const handles = await noteDefinitionDrift(
+        const { handles, drift } = await noteDefinitionDrift(
           context,
           args,
           state,
@@ -2657,6 +2678,7 @@ export const model = {
               name: spec.name,
               subjectVersion,
               version: written.version,
+              ...(drift !== undefined ? { definitionDrift: drift } : {}),
             },
           }),
         );
@@ -2702,7 +2724,7 @@ export const model = {
         const slug = workItemSlug(workItem);
         const view = await viewFor(context, slug, workItem);
         const state = requireState(view, workItem);
-        const handles = await noteDefinitionDrift(
+        const { handles, drift } = await noteDefinitionDrift(
           context,
           args,
           state,
@@ -2777,7 +2799,11 @@ export const model = {
             event: "evidence_recorded",
             stageId: state.stageId,
             summary: `Recorded evidence '${methodArgs.name}'`,
-            payload: { name: methodArgs.name, version: written.version },
+            payload: {
+              name: methodArgs.name,
+              version: written.version,
+              ...(drift !== undefined ? { definitionDrift: drift } : {}),
+            },
           }),
         );
         const clearedEvidence = await clearValidationIfOpen(
@@ -2822,7 +2848,7 @@ export const model = {
         const slug = workItemSlug(workItem);
         const view = await viewFor(context, slug, workItem);
         const state = requireState(view, workItem);
-        const handles = await noteDefinitionDrift(
+        const { handles, drift } = await noteDefinitionDrift(
           context,
           args,
           state,
@@ -2894,6 +2920,7 @@ export const model = {
               artifact: methodArgs.artifact,
               resolutions: methodArgs.resolutions,
               version: written.version,
+              ...(drift !== undefined ? { definitionDrift: drift } : {}),
             },
           }),
         );
@@ -3114,7 +3141,7 @@ export const model = {
         const slug = workItemSlug(workItem);
         const view = await viewFor(context, slug, workItem);
         const state = requireState(view, workItem);
-        const handles = await noteDefinitionDrift(
+        const { handles, drift } = await noteDefinitionDrift(
           context,
           args,
           state,
@@ -3198,6 +3225,7 @@ export const model = {
               from: stage.id,
               to: target.id,
               cycle: newState.cycles[target.id],
+              ...(drift !== undefined ? { definitionDrift: drift } : {}),
             },
           }),
         );
@@ -3443,7 +3471,7 @@ async function recordDecision(
     ? validateRecoveryApprovalNote(decision)
     : undefined;
 
-  const handles = await noteDefinitionDrift(
+  const { handles, drift } = await noteDefinitionDrift(
     context,
     args,
     state,
@@ -3587,6 +3615,7 @@ async function recordDecision(
         subjectDigest: subject?.digest,
         subjectAlgorithm: subject?.algorithm,
         subjectManifestVersion: subject?.manifest.manifestVersion,
+        ...(drift !== undefined ? { definitionDrift: drift } : {}),
       },
     }),
   );

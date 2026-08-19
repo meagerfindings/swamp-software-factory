@@ -274,6 +274,20 @@ function journalEvents(harness: Harness, event: string) {
   );
 }
 
+// Definition drift is no longer journaled as its own event/write (that
+// collided with a call site's own mainline journal entry, both targeting
+// `journal-<workItem>` in the same method execution — see
+// `noteDefinitionDrift`'s comment). Instead it is folded into whichever
+// mainline event's payload as a `definitionDrift` field. This collects every
+// journal entry (of any event) that carries one.
+function journalDriftEntries(harness: Harness, workItem = "TEST-1") {
+  return (harness.store.get(`journal-${workItem}`) ?? []).filter(
+    (entry) =>
+      (entry.payload as Record<string, unknown> | undefined)
+        ?.definitionDrift !== undefined,
+  );
+}
+
 // The status view is now a queryable record (`status-<slug>` /
 // `status-_factory`), not a log line: read the most-recently-written status
 // record, exactly as a `swamp data query` on the latest version would.
@@ -392,27 +406,40 @@ Deno.test("definition drift: unchanged definitions journal nothing", async () =>
   await startRun(harness);
   await recordPlan(harness);
 
-  assertEquals(journalEvents(harness, "definition-changed"), []);
+  assertEquals(journalDriftEntries(harness), []);
 });
 
-Deno.test("definition drift: journals exactly once per changed definition", async () => {
+Deno.test("definition drift: folds into the mainline event exactly once per changed definition, never as a separate journal write", async () => {
   const harness = buildHarness();
   await startRun(harness);
   const oldHash = latest(harness, "state-TEST-1").definitionHash;
   (harness.def.stages as { id: string; maxCycles?: number }[])[0].maxCycles = 4;
 
+  const journalWritesBefore =
+    harness.writeOrder.filter((n) => n === "journal-TEST-1").length;
   await recordPlan(harness);
-  const events = journalEvents(harness, "definition-changed");
-  assertEquals(events.length, 1);
-  const payload = events[0].payload as Record<string, unknown>;
-  assertEquals(payload.oldHash, oldHash);
-  assert(payload.oldHash !== payload.newHash);
-  assertEquals(payload.stageId, "planning");
-  assertEquals(payload.cycle, 1);
-  assertEquals(payload.definitionVersion, 3);
+  const journalWritesAfter =
+    harness.writeOrder.filter((n) => n === "journal-TEST-1").length;
+  // Exactly one journal write for this method execution — drift info rides
+  // along on record_artifact's own mainline write, not a second physical
+  // write to the same instance name.
+  assertEquals(journalWritesAfter - journalWritesBefore, 1);
+
+  const drifted = journalDriftEntries(harness);
+  assertEquals(drifted.length, 1);
+  // The event stays the mainline event ("artifact_recorded"), not a
+  // "definition-changed" event of its own.
+  assertEquals(drifted[0].event, "artifact_recorded");
+  const drift = (drifted[0].payload as Record<string, unknown>)
+    .definitionDrift as Record<string, unknown>;
+  assertEquals(drift.oldHash, oldHash);
+  assert(drift.oldHash !== drift.newHash);
+  assertEquals(drift.stageId, "planning");
+  assertEquals(drift.cycle, 1);
+  assertEquals(drift.definitionVersion, 3);
 
   await recordPlan(harness, "build the thing again");
-  assertEquals(journalEvents(harness, "definition-changed").length, 1);
+  assertEquals(journalDriftEntries(harness).length, 1);
 });
 
 Deno.test("definition drift: legacy state backfills silently then catches drift", async () => {
@@ -421,12 +448,12 @@ Deno.test("definition drift: legacy state backfills silently then catches drift"
   delete latest(harness, "state-TEST-1").definitionHash;
 
   await recordPlan(harness);
-  assertEquals(journalEvents(harness, "definition-changed"), []);
+  assertEquals(journalDriftEntries(harness), []);
   assertEquals(typeof latest(harness, "state-TEST-1").definitionHash, "string");
 
   (harness.def.stages as { id: string; maxCycles?: number }[])[0].maxCycles = 4;
   await recordPlan(harness, "changed definition");
-  assertEquals(journalEvents(harness, "definition-changed").length, 1);
+  assertEquals(journalDriftEntries(harness).length, 1);
 });
 
 Deno.test("start: refuses to start the same work item twice, allows others", async () => {
@@ -1830,12 +1857,12 @@ Deno.test("approve: recovery notes fail closed without writing any resource", as
         `${label} (${gateId}) wrote a resource`,
       );
       assertEquals(latest(harness, "state-TEST-1").definitionHash, stateHash);
-      assertEquals(journalEvents(harness, "definition-changed"), []);
+      assertEquals(journalDriftEntries(harness), []);
     }
   }
 });
 
-Deno.test("approve/reject: ordinary failures retain definition-drift writes", async () => {
+Deno.test("approve/reject: ordinary failures still persist the drifted state hash, with no separate journal write", async () => {
   for (const decision of ["approved", "rejected"] as const) {
     const harness = buildHarness();
     await startRun(harness);
@@ -1857,13 +1884,100 @@ Deno.test("approve/reject: ordinary failures retain definition-drift writes", as
         );
     }, Error);
 
-    const events = journalEvents(harness, "definition-changed");
-    assertEquals(events.length, 1);
-    assertEquals(
-      (events[0].payload as Record<string, unknown>).oldHash,
-      oldHash,
-    );
+    // recordDecision throws on the unknown gate ID before it ever reaches its
+    // own mainline writeJournal call, so there is nowhere left to fold the
+    // drift info into for this run — noteDefinitionDrift no longer writes a
+    // journal entry of its own (that used to collide with the mainline write
+    // when both fired in the same execution). The state write it performs
+    // (a different instance, state-<slug>) still persists, since platform
+    // writes that precede a throw are kept.
+    assertEquals(journalDriftEntries(harness), []);
     assert(latest(harness, "state-TEST-1").definitionHash !== oldHash);
+  }
+});
+
+Deno.test("definition drift: every drift-detecting method writes exactly one journal entry, with drift folded into its own mainline event", async () => {
+  // Regression coverage for the RIF-741 collision class: noteDefinitionDrift
+  // used to write its own "definition-changed" journal entry, and every one
+  // of these methods also performs its own mainline writeJournal call later
+  // in the same execution — both targeting the same instance name
+  // (journal-<workItem>), which the platform rejects as a duplicate write.
+  // Assert directly on write counts / journal content (not on the platform's
+  // duplicate-instance-name rejection, since this in-memory harness doesn't
+  // enforce that engine-side check) so this test would have caught the bug
+  // structurally, not just re-run it.
+
+  // record_dispatch -> "dispatched"
+  {
+    const harness = buildHarness();
+    await startRun(harness);
+    (harness.def.stages as { id: string; maxCycles?: number }[])[0]
+      .maxCycles = 4;
+    const before = harness.writeOrder.filter((n) => n === "journal-TEST-1")
+      .length;
+    await model.methods.record_dispatch.execute(
+      { workItem: WI },
+      harness.context,
+    );
+    const after = harness.writeOrder.filter((n) => n === "journal-TEST-1")
+      .length;
+    assertEquals(after - before, 1, "record_dispatch wrote >1 journal entry");
+    const drifted = journalDriftEntries(harness);
+    assertEquals(drifted.length, 1);
+    assertEquals(drifted[0].event, "dispatched");
+  }
+
+  // advance -> "advanced" (drift detected directly inside advance itself,
+  // with record_dispatch already run against the pre-drift definition so it
+  // doesn't intercept the drift first)
+  {
+    const harness = buildHarness();
+    await startRun(harness);
+    await recordPlan(harness);
+    await model.methods.record_dispatch.execute(
+      { workItem: WI },
+      harness.context,
+    );
+    (harness.def.stages as { id: string; maxCycles?: number }[])[0]
+      .maxCycles = 4;
+    const before = harness.writeOrder.filter((n) => n === "journal-TEST-1")
+      .length;
+    await model.methods.advance.execute(
+      { workItem: WI, transition: "submit" },
+      harness.context,
+    );
+    const after = harness.writeOrder.filter((n) => n === "journal-TEST-1")
+      .length;
+    assertEquals(after - before, 1, "advance wrote >1 journal entry");
+    const drifted = journalDriftEntries(harness);
+    assertEquals(drifted.length, 1);
+    assertEquals(drifted[0].event, "advanced");
+  }
+
+  // approve (success path) -> "approved"
+  {
+    const harness = buildHarness();
+    await startRun(harness);
+    await recordPlan(harness);
+    await advance(harness, "submit");
+    await model.methods.record_artifact.execute(
+      { workItem: WI, name: "plan-review", payload: { findings: [] } },
+      harness.context,
+    );
+    (harness.def.stages as { id: string; maxCycles?: number }[])[0]
+      .maxCycles = 4;
+    const before = harness.writeOrder.filter((n) => n === "journal-TEST-1")
+      .length;
+    await model.methods.approve.execute(
+      { workItem: WI, gateId: "plan-approval", actor: "adam" },
+      harness.context,
+    );
+    const after = harness.writeOrder.filter((n) => n === "journal-TEST-1")
+      .length;
+    assertEquals(after - before, 1, "approve wrote >1 journal entry");
+    const drifted = journalDriftEntries(harness);
+    assertEquals(drifted.length, 1);
+    assertEquals(drifted[0].event, "approved");
   }
 });
 
