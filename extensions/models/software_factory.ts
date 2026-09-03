@@ -1650,7 +1650,7 @@ async function checkState(
  */
 export const model = {
   type: "@mgreten/software-factory",
-  version: "2026.08.18.2",
+  version: "2026.09.03.1",
   upgrades: [
     {
       toVersion: "2026.08.12.2",
@@ -1666,6 +1666,16 @@ export const model = {
       toVersion: "2026.08.18.2",
       description:
         "Read runs created under the former @swamp package namespace",
+      upgradeAttributes: (old: Record<string, unknown>) => old,
+    },
+    {
+      toVersion: "2026.08.21.1",
+      description: "Align the model version with the package release",
+      upgradeAttributes: (old: Record<string, unknown>) => old,
+    },
+    {
+      toVersion: "2026.09.03.1",
+      description: "Parse nested CEL object literals in run-data bindings",
       upgradeAttributes: (old: Record<string, unknown>) => old,
     },
   ],

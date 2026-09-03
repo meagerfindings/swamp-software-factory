@@ -133,6 +133,21 @@ Deno.test("resolveBindings: whole-string expressions return raw values", () => {
   assertEquals((value.inputs as Record<string, unknown>).count, 2n);
 });
 
+Deno.test("resolveBindings: nested CEL object literals do not close the binding early", () => {
+  const { value, unresolved } = resolveBindings(
+    {
+      packet:
+        '${{ {"outer": {"inner": "literal }} braces"}} }}',
+    },
+    makeEvaluator(),
+  );
+
+  assertEquals(unresolved, []);
+  assertEquals(value.packet as unknown, {
+    outer: { inner: "literal }} braces" },
+  });
+});
+
 Deno.test("resolveBindings: embedded expressions interpolate as strings", () => {
   const { value, unresolved } = resolveBindings(
     {
@@ -146,6 +161,19 @@ Deno.test("resolveBindings: embedded expressions interpolate as strings", () => 
     value.prompt,
     "Review the change at https://git/pr/1 carefully.",
   );
+});
+
+Deno.test("resolveBindings: embedded nested objects preserve surrounding text", () => {
+  const { value, unresolved } = resolveBindings(
+    {
+      prompt:
+        'before ${{ {"outer": {"inner": true}} }} after ${{ "done" }}',
+    },
+    makeEvaluator(),
+  );
+
+  assertEquals(unresolved, []);
+  assertEquals(value.prompt, 'before {"outer":{"inner":true}} after done');
 });
 
 Deno.test("resolveBindings: failures are reported and the raw text kept", () => {

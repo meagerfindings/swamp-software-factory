@@ -36,10 +36,10 @@ import { model, persistAuthorityChallenge } from "./software_factory.ts";
 
 const WI = "TEST-1";
 
-Deno.test("model preserves upstream runtime namespace", () => {
-  assertEquals(model.type, "@swamp/software-factory");
+Deno.test("model uses the published package namespace", () => {
+  assertEquals(model.type, "@mgreten/software-factory");
   assertEquals(model.reports, [
-    "@swamp/software-factory/work-item-summary",
+    "@mgreten/software-factory/work-item-summary",
   ]);
 });
 
@@ -162,7 +162,7 @@ function buildHarness(definition?: Record<string, unknown>) {
 
   const context = {
     globalArgs: def,
-    modelType: "@swamp/software-factory",
+    modelType: "@mgreten/software-factory",
     modelId,
     logger: {
       info: (msg: string, props: Record<string, unknown>) =>

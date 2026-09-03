@@ -98,7 +98,75 @@ export function prepareBindingEnvironment(
   };
 }
 
-const EXPRESSION_PATTERN = /\$\{\{([\s\S]*?)\}\}/g;
+interface ExpressionMatch {
+  whole: string;
+  expression: string;
+  start: number;
+  end: number;
+}
+
+/**
+ * Find `${{ ... }}` bindings without mistaking adjacent CEL object-literal
+ * braces for the template delimiter. A non-greedy regular expression cannot
+ * distinguish `${{ {"outer": {"inner": true}} }}` from an early close.
+ */
+function expressionMatches(text: string): ExpressionMatch[] {
+  const matches: ExpressionMatch[] = [];
+  let searchFrom = 0;
+
+  while (searchFrom < text.length) {
+    const start = text.indexOf("${{", searchFrom);
+    if (start === -1) break;
+
+    let braceDepth = 0;
+    let quote: '"' | "'" | null = null;
+    let escaped = false;
+    let end = -1;
+
+    for (let index = start + 3; index < text.length; index += 1) {
+      const character = text[index];
+
+      if (quote !== null) {
+        if (escaped) {
+          escaped = false;
+        } else if (character === "\\") {
+          escaped = true;
+        } else if (character === quote) {
+          quote = null;
+        }
+        continue;
+      }
+
+      if (character === '"' || character === "'") {
+        quote = character;
+      } else if (character === "{") {
+        braceDepth += 1;
+      } else if (
+        character === "}" && text[index + 1] === "}" && braceDepth === 0
+      ) {
+        end = index + 2;
+        break;
+      } else if (character === "}" && braceDepth > 0) {
+        braceDepth -= 1;
+      }
+    }
+
+    if (end === -1) {
+      searchFrom = start + 3;
+      continue;
+    }
+
+    matches.push({
+      whole: text.slice(start, end),
+      expression: text.slice(start + 3, end - 2),
+      start,
+      end,
+    });
+    searchFrom = end;
+  }
+
+  return matches;
+}
 
 export interface UnresolvedBinding {
   expression: string;
@@ -140,17 +208,17 @@ export function resolveBindings<T>(
   };
 
   const resolveString = (text: string): unknown => {
-    const matches = [...text.matchAll(EXPRESSION_PATTERN)];
+    const matches = expressionMatches(text);
     if (matches.length === 0) return text;
 
     // Whole-string single expression: return the raw evaluated value.
     const only = matches[0];
-    if (matches.length === 1 && only[0] === text.trim()) {
+    if (matches.length === 1 && only.whole === text.trim()) {
       try {
-        return evaluate(only[1].trim());
+        return evaluate(only.expression.trim());
       } catch (error) {
         unresolved.push({
-          expression: only[1].trim(),
+          expression: only.expression.trim(),
           error: error instanceof Error ? error.message : String(error),
         });
         return text;
@@ -158,19 +226,27 @@ export function resolveBindings<T>(
     }
 
     // Embedded expressions: interpolate.
-    return text.replaceAll(EXPRESSION_PATTERN, (whole, expr: string) => {
+    let output = "";
+    let copiedThrough = 0;
+    for (const match of matches) {
+      output += text.slice(copiedThrough, match.start);
       try {
-        const result = evaluate(expr.trim());
-        if (result === null || result === undefined) return "";
-        return typeof result === "string" ? result : JSON.stringify(result);
+        const result = evaluate(match.expression.trim());
+        if (result !== null && result !== undefined) {
+          output += typeof result === "string"
+            ? result
+            : JSON.stringify(result);
+        }
       } catch (error) {
         unresolved.push({
-          expression: expr.trim(),
+          expression: match.expression.trim(),
           error: error instanceof Error ? error.message : String(error),
         });
-        return whole;
+        output += match.whole;
       }
-    });
+      copiedThrough = match.end;
+    }
+    return output + text.slice(copiedThrough);
   };
 
   return { value: walk(value) as T, unresolved };

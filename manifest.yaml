@@ -1,6 +1,6 @@
 manifestVersion: 1
 name: "@mgreten/software-factory"
-version: "2026.08.19.1"
+version: "2026.09.03.1"
 description: |
   A fully generic, model-driven state machine for guiding agents through a
   software development lifecycle. The entire machine — stages, transitions,
@@ -9,13 +9,60 @@ description: |
   no lifecycle concepts: adversarial review, comprehensive testing, release,
   and UAT stages are expressible (see examples/), never assumed.
 
+  ## How this package differs
+
+  This is not a different kind of software factory. It is an extended fork of
+  the same generic engine published as `@swamp/software-factory` and
+  `@adam/software-factory`.
+
+  The current published packages compare as follows:
+
+  | Capability | `@adam` | `@swamp` | `@mgreten` |
+  |---|:---:|:---:|:---:|
+  | Configurable stages, transitions, gates, and artifacts | ✓ | ✓ | ✓ |
+  | Dispatch records and queryable status views | — | ✓ | ✓ |
+  | Bundled driver skill | — | ✓ | ✓ |
+  | Migrate an active run after its definition changes | — | — | ✓ |
+  | Recover a terminal run without resetting its history | — | — | ✓ |
+  | Bind approvals to exact artifact versions and contents | — | — | ✓ |
+  | Attempt leases, heartbeats, retries, and orphan detection | — | — | ✓ |
+  | Official `@swamp` package | — | ✓ | — |
+
+  This package is closest to `@swamp/software-factory`: both include dispatch
+  recording, schema-validated artifacts and evidence, materialized status and
+  validation records, a static work-item summary report, and a driver skill.
+  Those shared capabilities are not unique to this package.
+
+  Compared with the currently published `@swamp` and `@adam` packages, this
+  package additionally provides:
+
+  - explicit, compatibility-checked migration of active runs to an edited
+    factory definition without discarding their recorded history;
+  - explicit recovery of a terminal run at a named non-terminal stage;
+  - optional approval and rejection binding to exact artifact/evidence
+    versions and canonical payload digests, plus immutable, non-authorizing
+    authority challenges for those exact subjects; and
+  - provider-neutral attempt leases, heartbeats, bounded retry outcomes, and
+    orphan-attempt claims for workflow execution.
+
+  Use `@swamp/software-factory` as the simpler official default when those
+  additions are unnecessary. Use this package for longer-lived runs that need
+  definition migration, failure recovery, exact-subject approvals, or durable
+  workflow-attempt tracking. `@adam/software-factory` is an earlier, smaller
+  variant without the newer operational features shown above.
+
+  This is an engine, not a turnkey SDLC or an agent runtime. It does not ship a
+  prescribed lifecycle, coding-agent provider, repository integration, issue
+  tracker, CI system, or release implementation. Consumers supply those in
+  factory definitions, workflows, and companion extensions.
+
   ## How it works
 
   An instance is a factory serving many work items concurrently — every
   method takes workItem, and all run data is namespaced per work item:
 
   ```
-  swamp model create @swamp/software-factory my-factory
+  swamp model create @mgreten/software-factory my-factory
   swamp model edit my-factory      # fill globalArguments: stages
   swamp model method run my-factory start --input workItem=ISSUE-42
   ```
@@ -33,6 +80,9 @@ description: |
 
   - `start` — validate the graph and start a work item at the initial stage
     (refuses to restart; resume with `status`)
+  - `begin_attempt` / `heartbeat_attempt` / `complete_attempt` /
+    `claim_orphan_attempt` — provider-neutral workflow-attempt leases and
+    bounded terminal decisions
   - `migrate` — explicitly adopt a compatible definition change for an active
     run without discarding its state, artifacts, or approvals
   - `resume` — recover a terminal run at an explicitly named non-terminal
@@ -55,7 +105,7 @@ description: |
   - `advance` — move along a gated transition
   - `summary` — full implementation history of a work item as markdown,
     rendered statically from the run data (no LLM); also persisted via the
-    @swamp/software-factory/work-item-summary report
+    @mgreten/software-factory/work-item-summary report
   - `validate` / `describe` — definition lint; Mermaid + tables
   - `reset` — destructive restart, requires confirm=reset
 
