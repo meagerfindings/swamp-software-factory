@@ -28,9 +28,9 @@ The extensionless [COPYING](COPYING) and
 [COPYING-EXCEPTION](COPYING-EXCEPTION) files remain at the repository root for
 exact upstream provenance but are not included through `additionalFiles`.
 
-The fork renames only the registry package identity to
-`@mgreten/software-factory`. For compatibility with existing model UUIDs and
-runtime data, it continues to export the upstream model type
-`@swamp/software-factory` and bundled report name
-`@swamp/software-factory/work-item-summary`; documentation, examples, and the
-bundled skill use those runnable identifiers.
+The fork uses `@mgreten/software-factory` for both its registry package and
+exported model type, and `@mgreten/software-factory/work-item-summary` for its
+bundled report. The engine retains legacy run-data reads under the upstream
+`@swamp/software-factory` namespace for the same model UUID; new records use
+the fork's namespace. Documentation, examples, and the bundled skill use the
+fork's exported identifiers.

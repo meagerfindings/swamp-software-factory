@@ -1650,7 +1650,7 @@ async function checkState(
  */
 export const model = {
   type: "@mgreten/software-factory",
-  version: "2026.09.03.1",
+  version: "2026.10.08.1",
   upgrades: [
     {
       toVersion: "2026.08.12.2",
@@ -1676,6 +1676,12 @@ export const model = {
     {
       toVersion: "2026.09.03.1",
       description: "Parse nested CEL object literals in run-data bindings",
+      upgradeAttributes: (old: Record<string, unknown>) => old,
+    },
+    {
+      toVersion: "2026.10.08.1",
+      description:
+        "Align documentation and bundled skill with the fork namespace",
       upgradeAttributes: (old: Record<string, unknown>) => old,
     },
   ],

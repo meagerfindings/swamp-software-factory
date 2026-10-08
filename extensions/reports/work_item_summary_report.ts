@@ -15,7 +15,7 @@
 // with Swamp. If not, see <https://www.gnu.org/licenses/>.
 
 /**
- * Work-item summary report for @swamp/software-factory.
+ * Work-item summary report for @mgreten/software-factory.
  *
  * Fires after the factory's `summary` method and persists the same
  * statically-rendered markdown history the method logs — every stage visit,

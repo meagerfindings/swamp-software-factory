@@ -6,11 +6,10 @@ extension originally developed by System Initiative, Inc. The fork begins at
 upstream source commit `7739f4357a6bc9503ab8ac953ae4b0826eb68603`; see
 [NOTICE.md](NOTICE.md) for attribution and provenance.
 
-The registry package is installed as `@mgreten/software-factory`, but it
-intentionally exports the compatibility model type `@swamp/software-factory`
-and report `@swamp/software-factory/work-item-summary`. Keeping those runtime
-identifiers stable means existing model UUIDs and recorded run data remain
-addressable without migration.
+The registry package and exported model type are `@mgreten/software-factory`;
+the bundled report is `@mgreten/software-factory/work-item-summary`. The engine
+can read legacy run data recorded under `@swamp/software-factory` for the same
+model UUID; new records use the current namespace.
 
 A fully generic, model-driven state machine for guiding agents through a
 software development lifecycle. The entire machine — stages, transitions, gates,
@@ -28,7 +27,8 @@ once, then run thousands of work items through it — every method takes
 `workItem`, and all run data is namespaced per work item:
 
 ```bash
-swamp model create @swamp/software-factory my-factory
+swamp extension pull @mgreten/software-factory
+swamp model create @mgreten/software-factory my-factory
 swamp model edit my-factory      # fill globalArguments: stages
                                  # (seed from examples/, see below)
 swamp model method run my-factory validate
@@ -200,7 +200,7 @@ forth of plans, reviews, findings and their resolutions, approvals, evidence,
 and rework loops — reconstructed entirely from the journal and the versioned run
 records. No LLM is involved; the same data always renders the same report.
 
-The extension also ships a `@swamp/software-factory/work-item-summary` report
+The extension also ships a `@mgreten/software-factory/work-item-summary` report
 that persists the identical markdown (plus a structured JSON twin) through
 swamp's report machinery, browsable with `swamp report search` /
 `swamp report get`. It is a model-type default; to keep the stored report stream
@@ -211,7 +211,7 @@ definition file (a sibling of `globalArguments`):
 reports:
   require:
     - {
-        name: "@swamp/software-factory/work-item-summary",
+        name: "@mgreten/software-factory/work-item-summary",
         methods: [summary],
       }
 ```
